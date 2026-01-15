@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     chunk_overlap: int = 50
     top_k: int = 5
 
+    # Document settings
+    documents_dir: str = "./documents"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
