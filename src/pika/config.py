@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     # Document settings
     documents_dir: str = "./documents"
 
+    # Vector store settings
+    chroma_persist_dir: str = "./data/chroma"
+    embedding_model: str = "all-MiniLM-L6-v2"
+
+    # Confidence thresholds
+    confidence_high: float = 0.7
+    confidence_medium: float = 0.5
+    confidence_low: float = 0.3
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
