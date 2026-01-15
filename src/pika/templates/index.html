@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+
+{% block title %}PIKA - Chat{% endblock %}
+
+{% block content %}
+<aside class="sidebar">
+    <div class="sidebar-header">
+        <h1 class="logo">PIKA</h1>
+        <p class="tagline">Document Intelligence</p>
+    </div>
+
+    <div class="sidebar-section">
+        <div class="section-header">
+            <h2>Index Status</h2>
+        </div>
+        <div class="stats" id="stats">
+            <div class="stat">
+                <span class="stat-value" id="doc-count">-</span>
+                <span class="stat-label">Documents</span>
+            </div>
+            <div class="stat">
+                <span class="stat-value" id="chunk-count">-</span>
+                <span class="stat-label">Chunks</span>
+            </div>
+        </div>
+        <button class="btn btn-primary" id="refresh-index" onclick="refreshIndex()">
+            Refresh Index
+        </button>
+    </div>
+
+    <div class="sidebar-section">
+        <div class="section-header">
+            <h2>Documents</h2>
+        </div>
+        <div class="upload-area" id="upload-area">
+            <input type="file" id="file-input" multiple accept=".pdf,.docx,.txt,.md" hidden>
+            <div class="upload-content">
+                <span class="upload-icon">+</span>
+                <p>Drop files here or click to upload</p>
+                <p class="upload-hint">PDF, DOCX, TXT, MD</p>
+            </div>
+        </div>
+        <ul class="document-list" id="document-list">
+            <!-- Documents loaded via JS -->
+        </ul>
+    </div>
+</aside>
+
+<main class="chat-container">
+    <div class="chat-messages" id="chat-messages">
+        <div class="welcome-message">
+            <h2>Welcome to PIKA</h2>
+            <p>Upload documents and ask questions about their content.</p>
+            <p>Start by dropping some files in the sidebar, then click "Refresh Index" to index them.</p>
+        </div>
+    </div>
+
+    <form class="chat-input-form" id="chat-form" onsubmit="sendQuestion(event)">
+        <input
+            type="text"
+            class="chat-input"
+            id="question-input"
+            placeholder="Ask a question about your documents..."
+            autocomplete="off"
+        >
+        <button type="submit" class="btn btn-send" id="send-btn">
+            Send
+        </button>
+    </form>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // State
+    let isLoading = false;
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+        loadDocuments();
+        loadStats();
+        setupUpload();
+    });
+
+    // Load documents list
+    async function loadDocuments() {
+        try {
+            const response = await fetch('/documents');
+            const documents = await response.json();
+            const list = document.getElementById('document-list');
+
+            if (documents.length === 0) {
+                list.innerHTML = '<li class="no-documents">No documents yet</li>';
+                return;
+            }
+
+            list.innerHTML = documents.map(doc => `
+                <li class="document-item">
+                    <span class="document-name" title="${doc.filename}">${doc.filename}</span>
+                    <span class="document-size">${formatSize(doc.size_bytes)}</span>
+                    <button class="btn-delete" onclick="deleteDocument('${doc.filename}')" title="Delete">×</button>
+                </li>
+            `).join('');
+        } catch (error) {
+            console.error('Failed to load documents:', error);
+        }
+    }
+
+    // Load index stats
+    async function loadStats() {
+        try {
+            const response = await fetch('/api/v1/index/stats');
+            const stats = await response.json();
+            document.getElementById('doc-count').textContent = stats.total_documents;
+            document.getElementById('chunk-count').textContent = stats.total_chunks;
+        } catch (error) {
+            console.error('Failed to load stats:', error);
+        }
+    }
+
+    // Refresh index
+    async function refreshIndex() {
+        const btn = document.getElementById('refresh-index');
+        btn.disabled = true;
+        btn.textContent = 'Indexing...';
+
+        try {
+            const response = await fetch('/api/v1/index', { method: 'POST' });
+            const result = await response.json();
+            await loadStats();
+            addSystemMessage(`Indexed ${result.total_documents} documents (${result.total_chunks} chunks)`);
+        } catch (error) {
+            addSystemMessage('Failed to refresh index: ' + error.message, true);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Refresh Index';
+        }
+    }
+
+    // Setup file upload
+    function setupUpload() {
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('file-input');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', () => {
+            handleFiles(fileInput.files);
+            fileInput.value = '';
+        });
+    }
+
+    // Handle file uploads
+    async function handleFiles(files) {
+        for (const file of files) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Upload failed');
+                }
+
+                addSystemMessage(`Uploaded: ${file.name}`);
+            } catch (error) {
+                addSystemMessage(`Failed to upload ${file.name}: ${error.message}`, true);
+            }
+        }
+        await loadDocuments();
+    }
+
+    // Delete document
+    async function deleteDocument(filename) {
+        if (!confirm(`Delete "${filename}"?`)) return;
+
+        try {
+            const response = await fetch(`/documents/${encodeURIComponent(filename)}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) throw new Error('Delete failed');
+
+            addSystemMessage(`Deleted: ${filename}`);
+            await loadDocuments();
+        } catch (error) {
+            addSystemMessage(`Failed to delete: ${error.message}`, true);
+        }
+    }
+
+    // Send question
+    async function sendQuestion(event) {
+        event.preventDefault();
+
+        const input = document.getElementById('question-input');
+        const question = input.value.trim();
+
+        if (!question || isLoading) return;
+
+        input.value = '';
+        isLoading = true;
+        updateSendButton();
+
+        // Add user message
+        addMessage(question, 'user');
+
+        // Add loading indicator
+        const loadingId = addMessage('Thinking...', 'assistant', true);
+
+        try {
+            const response = await fetch('/api/v1/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question })
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.detail || 'Query failed');
+            }
+
+            // Remove loading and add response
+            removeMessage(loadingId);
+            addAnswerMessage(result);
+
+        } catch (error) {
+            removeMessage(loadingId);
+            addMessage('Error: ' + error.message, 'error');
+        } finally {
+            isLoading = false;
+            updateSendButton();
+        }
+    }
+
+    // Add a chat message
+    function addMessage(content, type, isLoading = false) {
+        const container = document.getElementById('chat-messages');
+        const welcome = container.querySelector('.welcome-message');
+        if (welcome) welcome.remove();
+
+        const id = 'msg-' + Date.now();
+        const div = document.createElement('div');
+        div.id = id;
+        div.className = `message message-${type}${isLoading ? ' loading' : ''}`;
+        div.innerHTML = `<div class="message-content">${escapeHtml(content)}</div>`;
+
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+
+        return id;
+    }
+
+    // Add answer with sources
+    function addAnswerMessage(result) {
+        const container = document.getElementById('chat-messages');
+
+        const div = document.createElement('div');
+        div.className = 'message message-assistant';
+
+        let sourcesHtml = '';
+        if (result.sources && result.sources.length > 0) {
+            const uniqueSources = [...new Set(result.sources.map(s => s.filename))];
+            sourcesHtml = `
+                <div class="sources">
+                    <span class="sources-label">Sources:</span>
+                    ${uniqueSources.map(f => `<span class="source-tag">${escapeHtml(f)}</span>`).join('')}
+                </div>
+            `;
+        }
+
+        div.innerHTML = `
+            <div class="message-content">
+                <div class="answer-text">${escapeHtml(result.answer)}</div>
+                ${sourcesHtml}
+                <span class="confidence-badge confidence-${result.confidence}">${result.confidence}</span>
+            </div>
+        `;
+
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    // Add system message
+    function addSystemMessage(content, isError = false) {
+        const container = document.getElementById('chat-messages');
+        const div = document.createElement('div');
+        div.className = `system-message${isError ? ' error' : ''}`;
+        div.textContent = content;
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+
+        setTimeout(() => div.remove(), 5000);
+    }
+
+    // Remove message by ID
+    function removeMessage(id) {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+    }
+
+    // Update send button state
+    function updateSendButton() {
+        const btn = document.getElementById('send-btn');
+        btn.disabled = isLoading;
+        btn.textContent = isLoading ? '...' : 'Send';
+    }
+
+    // Format file size
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    // Escape HTML
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+</script>
+{% endblock %}

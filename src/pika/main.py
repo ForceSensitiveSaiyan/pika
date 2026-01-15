@@ -1,12 +1,18 @@
 """PIKA - FastAPI application entry point."""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from pika import __version__
-from pika.api.routes import router
+from pika.api.routes import router as api_router
+from pika.api.web import router as web_router
 from pika.config import get_settings
+
+# Static files directory
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 @asynccontextmanager
@@ -30,15 +36,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    app.include_router(router, prefix="/api/v1", tags=["api"])
+    # Mount static files
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-    @app.get("/")
-    async def root():
-        return {
-            "name": settings.app_name,
-            "version": __version__,
-            "docs": "/docs",
-        }
+    # Include API routes
+    app.include_router(api_router, prefix="/api/v1", tags=["api"])
+
+    # Include web routes (must be after API routes)
+    app.include_router(web_router, tags=["web"])
 
     return app
 
