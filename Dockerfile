@@ -22,6 +22,7 @@ RUN mkdir -p /app/documents /app/data/chroma
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app/src
 ENV DOCUMENTS_DIR=/app/documents
 ENV CHROMA_PERSIST_DIR=/app/data/chroma
 
