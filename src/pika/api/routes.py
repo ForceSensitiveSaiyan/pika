@@ -1,11 +1,14 @@
 """API routes for PIKA."""
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from pika.services.ollama import OllamaClient, get_ollama_client
 from pika.services.rag import RAGEngine, get_rag_engine, Confidence
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -186,4 +189,5 @@ async def query_documents(
             confidence=result.confidence,
         )
     except Exception as e:
+        logger.exception(f"Query failed for question: {request.question[:50]}...")
         raise HTTPException(status_code=500, detail=f"Query failed: {e}")

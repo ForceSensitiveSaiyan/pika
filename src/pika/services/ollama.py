@@ -1,10 +1,23 @@
 """Ollama client service for LLM interactions."""
 
+import logging
 from typing import AsyncIterator
 
 import httpx
 
 from pika.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
+
+
+def _make_timeout(seconds: int) -> httpx.Timeout:
+    """Create httpx timeout with extended read timeout for LLM generation."""
+    return httpx.Timeout(
+        connect=10.0,
+        read=float(seconds),
+        write=10.0,
+        pool=10.0,
+    )
 
 
 class OllamaClient:
@@ -49,7 +62,9 @@ class OllamaClient:
         if system:
             payload["system"] = system
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        timeout = _make_timeout(self.timeout)
+        logger.info(f"Calling Ollama generate with timeout={self.timeout}s (read={timeout.read}s)")
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(
                 f"{self.base_url}/api/generate",
                 json=payload,
@@ -73,7 +88,7 @@ class OllamaClient:
         if system:
             payload["system"] = system
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=_make_timeout(self.timeout)) as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/api/generate",
@@ -95,7 +110,7 @@ class OllamaClient:
             "prompt": text,
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=_make_timeout(self.timeout)) as client:
             response = await client.post(
                 f"{self.base_url}/api/embeddings",
                 json=payload,

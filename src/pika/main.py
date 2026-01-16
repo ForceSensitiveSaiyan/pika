@@ -1,5 +1,7 @@
 """PIKA - FastAPI application entry point."""
 
+import logging
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,6 +12,14 @@ from pika import __version__
 from pika.api.routes import router as api_router
 from pika.api.web import router as web_router
 from pika.config import get_settings
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
 
 # Static files directory
 STATIC_DIR = Path(__file__).parent / "static"
