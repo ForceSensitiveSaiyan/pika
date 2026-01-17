@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from pika.services.app_config import get_app_config, AppConfigService
-from pika.services.ollama import OllamaClient, get_ollama_client, _format_size
+from pika.services.ollama import OllamaClient, get_ollama_client, _format_size, get_active_pull
 from pika.services.rag import RAGEngine, get_rag_engine, Confidence, IndexedDocument
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,35 @@ async def pull_model(
     return StreamingResponse(
         generate_progress(),
         media_type="text/event-stream",
+    )
+
+
+class PullStatusResponse(BaseModel):
+    """Response model for pull status."""
+
+    active: bool
+    model: str | None = None
+    status: str | None = None
+    completed: int = 0
+    total: int = 0
+    percent: int = 0
+    error: str | None = None
+
+
+@router.get("/models/pull/status", response_model=PullStatusResponse)
+async def get_pull_status() -> PullStatusResponse:
+    """Get the status of any active model pull."""
+    pull = get_active_pull()
+    if pull is None:
+        return PullStatusResponse(active=False)
+    return PullStatusResponse(
+        active=True,
+        model=pull.model,
+        status=pull.status,
+        completed=pull.completed,
+        total=pull.total,
+        percent=pull.percent,
+        error=pull.error,
     )
 
 

@@ -2,7 +2,8 @@
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import AsyncIterator
 
 import httpx
@@ -20,6 +21,49 @@ class ModelInfo:
     name: str
     size: int
     modified_at: str
+
+
+@dataclass
+class PullStatus:
+    """Status of an active model pull."""
+
+    model: str
+    status: str = "starting"
+    completed: int = 0
+    total: int = 0
+    started_at: datetime = field(default_factory=datetime.now)
+    error: str | None = None
+
+    @property
+    def percent(self) -> int:
+        if self.total == 0:
+            return 0
+        return int((self.completed / self.total) * 100)
+
+    def to_dict(self) -> dict:
+        return {
+            "model": self.model,
+            "status": self.status,
+            "completed": self.completed,
+            "total": self.total,
+            "percent": self.percent,
+            "error": self.error,
+        }
+
+
+# Global pull status tracker
+_active_pull: PullStatus | None = None
+
+
+def get_active_pull() -> PullStatus | None:
+    """Get the currently active pull status, if any."""
+    return _active_pull
+
+
+def _set_active_pull(status: PullStatus | None) -> None:
+    """Set the active pull status."""
+    global _active_pull
+    _active_pull = status
 
 
 def _make_timeout(seconds: int) -> httpx.Timeout:
@@ -88,17 +132,37 @@ class OllamaClient:
         # Use a very long timeout for model pulls (can take a while)
         timeout = httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0)
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/api/pull",
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line:
-                        data = json.loads(line)
-                        yield data
+        # Initialize pull status tracking
+        pull_status = PullStatus(model=model_name)
+        _set_active_pull(pull_status)
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/api/pull",
+                    json=payload,
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line:
+                            data = json.loads(line)
+                            # Update pull status
+                            if "status" in data:
+                                pull_status.status = data["status"]
+                            if "completed" in data:
+                                pull_status.completed = data["completed"]
+                            if "total" in data:
+                                pull_status.total = data["total"]
+                            yield data
+        except Exception as e:
+            pull_status.error = str(e)
+            pull_status.status = "error"
+            raise
+        finally:
+            # Clear active pull when done (success or error)
+            if pull_status.status == "success" or pull_status.error:
+                _set_active_pull(None)
 
     async def generate(
         self,
