@@ -8,7 +8,10 @@ from pydantic import BaseModel
 
 from pika.services.app_config import get_app_config, AppConfigService
 from pika.services.ollama import OllamaClient, get_ollama_client, _format_size, get_active_pull, is_pull_running, start_pull_task
-from pika.services.rag import RAGEngine, get_rag_engine, Confidence, IndexedDocument
+from pika.services.rag import (
+    RAGEngine, get_rag_engine, Confidence, IndexedDocument,
+    get_active_query, clear_query_status, start_query_task, is_query_running
+)
 
 logger = logging.getLogger(__name__)
 
@@ -310,19 +313,61 @@ async def get_indexed_documents(
         raise HTTPException(status_code=500, detail=f"Failed to get documents: {e}")
 
 
-@router.post("/query", response_model=QueryResponse)
+import uuid
+
+
+class QueryStartResponse(BaseModel):
+    """Response model for starting a query."""
+
+    query_id: str
+    status: str
+
+
+class QueryStatusResponse(BaseModel):
+    """Response model for query status."""
+
+    query_id: str | None
+    question: str | None
+    status: str  # pending, running, completed, error, none
+    result: QueryResponse | None = None
+    error: str | None = None
+
+
+@router.post("/query", response_model=QueryStartResponse)
 async def query_documents(
     request: QueryRequest,
-    rag: RAGEngine = Depends(get_rag_engine),
-) -> QueryResponse:
-    """Query the RAG system with a question."""
+) -> QueryStartResponse:
+    """Start a background query to the RAG system."""
+    query_id = str(uuid.uuid4())[:8]
+
     try:
-        result = await rag.query(
+        await start_query_task(
             question=request.question,
+            query_id=query_id,
             top_k=request.top_k,
         )
-        return QueryResponse(
-            answer=result.answer,
+        return QueryStartResponse(query_id=query_id, status="running")
+    except Exception as e:
+        logger.exception(f"Failed to start query: {request.question[:50]}...")
+        raise HTTPException(status_code=500, detail=f"Failed to start query: {e}")
+
+
+@router.get("/query/status", response_model=QueryStatusResponse)
+async def get_query_status() -> QueryStatusResponse:
+    """Get the status of the current or most recent query."""
+    query = get_active_query()
+
+    if query is None:
+        return QueryStatusResponse(
+            query_id=None,
+            question=None,
+            status="none",
+        )
+
+    result = None
+    if query.result:
+        result = QueryResponse(
+            answer=query.result.answer,
             sources=[
                 SourceResponse(
                     filename=s.filename,
@@ -330,10 +375,22 @@ async def query_documents(
                     content=s.content,
                     similarity=s.similarity,
                 )
-                for s in result.sources
+                for s in query.result.sources
             ],
-            confidence=result.confidence,
+            confidence=query.result.confidence,
         )
-    except Exception as e:
-        logger.exception(f"Query failed for question: {request.question[:50]}...")
-        raise HTTPException(status_code=500, detail=f"Query failed: {e}")
+
+    return QueryStatusResponse(
+        query_id=query.query_id,
+        question=query.question,
+        status=query.status,
+        result=result,
+        error=query.error,
+    )
+
+
+@router.delete("/query/status")
+async def clear_query() -> dict:
+    """Clear the current query status."""
+    clear_query_status()
+    return {"status": "cleared"}

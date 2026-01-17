@@ -56,10 +56,13 @@
     let isLoading = false;
     let messageCounter = 0;
     let chatHistory = []; // {type, content, result?}
+    let queryPollingInterval = null;
+    let currentLoadingId = null;
 
     // Restore chat history on page load
     document.addEventListener('DOMContentLoaded', () => {
         restoreChatHistory();
+        checkActiveQuery();
     });
 
     function saveChatHistory() {
@@ -88,19 +91,115 @@
                     addMessage(msg.content, 'error');
                 }
             }
-
-            // Check if there was a pending query that got interrupted
-            const pendingQuestion = sessionStorage.getItem('pika_pending_question');
-            if (pendingQuestion) {
-                sessionStorage.removeItem('pika_pending_question');
-                // Question is already in history, just add the interrupted message
-                addMessage('Query was interrupted. Please ask again.', 'error');
-                chatHistory.push({ type: 'error', content: 'Query was interrupted. Please ask again.' });
-                saveChatHistory();
-            }
         } catch (e) {
             console.error('Failed to restore chat history:', e);
             chatHistory = [];
+        }
+    }
+
+    async function checkActiveQuery() {
+        try {
+            const response = await fetch('/api/v1/query/status');
+            const status = await response.json();
+
+            if (status.status === 'running') {
+                // There's an active query - show loading and start polling
+                isLoading = true;
+                updateSendButton();
+
+                // Remove welcome if present
+                const welcome = document.getElementById('welcome');
+                if (welcome) welcome.remove();
+
+                // Check if question is already in history
+                const lastMsg = chatHistory[chatHistory.length - 1];
+                if (!lastMsg || lastMsg.type !== 'user' || lastMsg.content !== status.question) {
+                    addMessage(status.question, 'user');
+                    chatHistory.push({ type: 'user', content: status.question });
+                    saveChatHistory();
+                }
+
+                currentLoadingId = addMessage('Thinking', 'assistant', true);
+                startQueryPolling();
+            } else if (status.status === 'completed' && status.result) {
+                // Query completed while we were away - show the result
+                const welcome = document.getElementById('welcome');
+                if (welcome) welcome.remove();
+
+                // Check if question is in history but answer isn't
+                const lastMsg = chatHistory[chatHistory.length - 1];
+                if (lastMsg && lastMsg.type === 'user' && lastMsg.content === status.question) {
+                    // Add the answer
+                    addAnswerMessage(status.result);
+                    chatHistory.push({ type: 'assistant', result: status.result });
+                    saveChatHistory();
+                }
+
+                // Clear the server-side status
+                await fetch('/api/v1/query/status', { method: 'DELETE' });
+            }
+        } catch (error) {
+            console.error('Failed to check query status:', error);
+        }
+    }
+
+    function startQueryPolling() {
+        if (queryPollingInterval) return;
+
+        queryPollingInterval = setInterval(async () => {
+            try {
+                const response = await fetch('/api/v1/query/status');
+                const status = await response.json();
+
+                if (status.status === 'completed') {
+                    stopQueryPolling();
+
+                    if (currentLoadingId) {
+                        removeMessage(currentLoadingId);
+                        currentLoadingId = null;
+                    }
+
+                    if (status.result) {
+                        addAnswerMessage(status.result);
+                        chatHistory.push({ type: 'assistant', result: status.result });
+                        saveChatHistory();
+                    }
+
+                    isLoading = false;
+                    updateSendButton();
+
+                    // Clear server-side status
+                    await fetch('/api/v1/query/status', { method: 'DELETE' });
+
+                } else if (status.status === 'error') {
+                    stopQueryPolling();
+
+                    if (currentLoadingId) {
+                        removeMessage(currentLoadingId);
+                        currentLoadingId = null;
+                    }
+
+                    const errorMsg = 'Error: ' + (status.error || 'Query failed');
+                    addMessage(errorMsg, 'error');
+                    chatHistory.push({ type: 'error', content: errorMsg });
+                    saveChatHistory();
+
+                    isLoading = false;
+                    updateSendButton();
+
+                    // Clear server-side status
+                    await fetch('/api/v1/query/status', { method: 'DELETE' });
+                }
+            } catch (error) {
+                console.error('Failed to poll query status:', error);
+            }
+        }, 500);
+    }
+
+    function stopQueryPolling() {
+        if (queryPollingInterval) {
+            clearInterval(queryPollingInterval);
+            queryPollingInterval = null;
         }
     }
 
@@ -125,11 +224,8 @@
         chatHistory.push({ type: 'user', content: question });
         saveChatHistory();
 
-        // Track pending question (in case user navigates away)
-        sessionStorage.setItem('pika_pending_question', question);
-
         // Add loading message
-        const loadingId = addMessage('Thinking', 'assistant', true);
+        currentLoadingId = addMessage('Thinking', 'assistant', true);
 
         try {
             const response = await fetch('/api/v1/query', {
@@ -144,23 +240,17 @@
                 throw new Error(result.detail || 'Query failed');
             }
 
-            // Clear pending question - query completed
-            sessionStorage.removeItem('pika_pending_question');
-
-            removeMessage(loadingId);
-            addAnswerMessage(result);
-            chatHistory.push({ type: 'assistant', result: result });
-            saveChatHistory();
+            // Query started - begin polling for result
+            startQueryPolling();
 
         } catch (error) {
-            // Clear pending question - query failed
-            sessionStorage.removeItem('pika_pending_question');
-
-            removeMessage(loadingId);
+            if (currentLoadingId) {
+                removeMessage(currentLoadingId);
+                currentLoadingId = null;
+            }
             addMessage('Error: ' + error.message, 'error');
             chatHistory.push({ type: 'error', content: 'Error: ' + error.message });
             saveChatHistory();
-        } finally {
             isLoading = false;
             updateSendButton();
         }

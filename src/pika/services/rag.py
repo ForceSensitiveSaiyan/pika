@@ -1,6 +1,9 @@
 """RAG engine using ChromaDB and sentence-transformers."""
 
-from dataclasses import dataclass
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
@@ -11,6 +14,8 @@ from sentence_transformers import SentenceTransformer
 from pika.config import Settings, get_settings
 from pika.services.documents import DocumentProcessor, get_document_processor
 from pika.services.ollama import OllamaClient, get_ollama_client
+
+logger = logging.getLogger(__name__)
 
 
 class Confidence(str, Enum):
@@ -56,6 +61,64 @@ class IndexedDocument:
 
     filename: str
     chunk_count: int
+
+
+@dataclass
+class QueryStatus:
+    """Status of an active or completed query."""
+
+    query_id: str
+    question: str
+    status: str = "pending"  # pending, running, completed, error
+    result: "QueryResult | None" = None
+    error: str | None = None
+    started_at: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> dict:
+        result_dict = None
+        if self.result:
+            result_dict = {
+                "answer": self.result.answer,
+                "sources": [
+                    {
+                        "filename": s.filename,
+                        "chunk_index": s.chunk_index,
+                        "content": s.content,
+                        "similarity": s.similarity,
+                    }
+                    for s in self.result.sources
+                ],
+                "confidence": self.result.confidence.value,
+            }
+        return {
+            "query_id": self.query_id,
+            "question": self.question,
+            "status": self.status,
+            "result": result_dict,
+            "error": self.error,
+        }
+
+
+# Global query status tracker
+_active_query: QueryStatus | None = None
+_query_task: asyncio.Task | None = None
+
+
+def get_active_query() -> QueryStatus | None:
+    """Get the currently active or most recent query status."""
+    return _active_query
+
+
+def clear_query_status() -> None:
+    """Clear the query status."""
+    global _active_query
+    _active_query = None
+
+
+def _set_query_status(status: QueryStatus | None) -> None:
+    """Set the query status."""
+    global _active_query
+    _active_query = status
 
 
 class RAGEngine:
@@ -329,3 +392,32 @@ def get_rag_engine() -> RAGEngine:
     if _rag_engine is None:
         _rag_engine = RAGEngine()
     return _rag_engine
+
+
+def is_query_running() -> bool:
+    """Check if a query task is currently running."""
+    return _query_task is not None and not _query_task.done()
+
+
+async def start_query_task(question: str, query_id: str, top_k: int | None = None) -> QueryStatus:
+    """Start a background query task."""
+    global _query_task
+
+    # Create query status
+    query_status = QueryStatus(query_id=query_id, question=question, status="running")
+    _set_query_status(query_status)
+
+    async def run_query():
+        try:
+            rag = get_rag_engine()
+            result = await rag.query(question=question, top_k=top_k)
+            query_status.result = result
+            query_status.status = "completed"
+            logger.info(f"Query completed: {query_id}")
+        except Exception as e:
+            query_status.error = str(e)
+            query_status.status = "error"
+            logger.error(f"Query failed: {query_id} - {e}")
+
+    _query_task = asyncio.create_task(run_query())
+    return query_status

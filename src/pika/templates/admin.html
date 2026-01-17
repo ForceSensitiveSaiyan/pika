@@ -304,6 +304,25 @@
         const modelName = input.value.trim();
         if (!modelName) return;
 
+        // Check if model is already downloaded
+        const select = document.getElementById('model-select');
+        const existingModels = Array.from(select.options).map(opt => opt.value);
+
+        // Check for exact match or base name match (e.g., "llama3.1:8b" matches "llama3.1:8b")
+        const modelExists = existingModels.some(existing => {
+            // Exact match
+            if (existing === modelName) return true;
+            // Match without tag (e.g., "llama3.1" matches "llama3.1:latest")
+            const baseName = modelName.split(':')[0];
+            const existingBase = existing.split(':')[0];
+            return baseName === existingBase && !modelName.includes(':');
+        });
+
+        if (modelExists) {
+            showToast(`Model "${modelName}" is already downloaded`, 'info');
+            return;
+        }
+
         const btn = document.getElementById('pull-model-btn');
         const progress = document.getElementById('pull-progress');
         const progressFill = document.getElementById('progress-fill');
