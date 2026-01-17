@@ -65,6 +65,30 @@ class AppConfigService:
         """Set the current model."""
         self.set("current_model", model)
 
+    def is_setup_complete(self) -> bool:
+        """Check if initial setup has been completed."""
+        return self.get("setup_complete", False)
+
+    def get_admin_credentials(self) -> dict | None:
+        """Get stored admin credentials."""
+        return self.get("admin_credentials")
+
+    def set_admin_credentials(self, username: str, password_hash: str) -> None:
+        """Store admin credentials (password should be hashed)."""
+        self.set("admin_credentials", {
+            "username": username,
+            "password_hash": password_hash,
+        })
+        self.set("setup_complete", True)
+
+    def get_api_key(self) -> str | None:
+        """Get stored API key."""
+        return self.get("api_key")
+
+    def set_api_key(self, api_key: str) -> None:
+        """Store API key."""
+        self.set("api_key", api_key)
+
 
 # Singleton instance
 _app_config: AppConfigService | None = None

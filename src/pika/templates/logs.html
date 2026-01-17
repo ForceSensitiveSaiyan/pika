@@ -10,58 +10,81 @@
         <span class="header-divider">/</span>
         <span class="header-title">Audit Logs</span>
     </div>
-    <a href="/admin" class="header-link">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M19 12H5M12 19l-7-7 7-7"/>
-        </svg>
-        Back to Admin
-    </a>
+    <div class="header-right">
+        <a href="/admin" class="header-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 12H5M12 19l-7-7 7-7"/>
+            </svg>
+            Back to Admin
+        </a>
+    </div>
 </header>
 
-<div class="logs-container">
-    <div class="logs-header">
-        <h1 class="logs-title">Recent Activity</h1>
-        <span style="color: var(--text-secondary); font-size: 14px;">
-            Last {{ logs|length }} events
-        </span>
+<!-- Logs Layout -->
+<div class="admin-layout">
+    <div class="card" style="max-width: 1000px; margin: 0 auto;">
+        <div class="card-header">
+            <h2 class="card-title">Recent Activity</h2>
+            <span class="badge badge-secondary">{{ logs|length }} events</span>
+        </div>
+        <div class="card-body">
+            {% if logs %}
+                <div class="logs-list">
+                    {% for log in logs %}
+                    <div class="log-item">
+                        <div class="log-item-header">
+                            <span class="log-badge log-badge-{{ log.event }}">{{ log.event }}</span>
+                            <span class="log-time">{{ log.timestamp }}</span>
+                        </div>
+                        <div class="log-item-content">
+                            {% if log.event == 'query' %}
+                                <div class="log-detail">
+                                    <span class="log-label">Question:</span>
+                                    <span class="log-value">{{ log.question[:150] }}{% if log.question|length > 150 %}...{% endif %}</span>
+                                </div>
+                                <div class="log-meta">
+                                    <span><strong>Model:</strong> {{ log.model }}</span>
+                                    <span><strong>Confidence:</strong> {{ log.confidence }}</span>
+                                    <span><strong>Sources:</strong> {{ log.sources|length }}</span>
+                                </div>
+                                {% if log.error %}
+                                <div class="log-error">Error: {{ log.error }}</div>
+                                {% endif %}
+                            {% elif log.event == 'admin' %}
+                                <div class="log-detail">
+                                    <span class="log-label">Action:</span>
+                                    <span class="log-value">{{ log.action }}</span>
+                                </div>
+                                {% if log.details %}
+                                <div class="log-meta">
+                                    {% for key, value in log.details.items() %}
+                                        <span><strong>{{ key }}:</strong> {{ value }}</span>
+                                    {% endfor %}
+                                </div>
+                                {% endif %}
+                            {% elif log.event == 'auth' %}
+                                <div class="log-detail">
+                                    <span class="log-label">Action:</span>
+                                    <span class="log-value">{{ log.action }}</span>
+                                </div>
+                                <div class="log-meta">
+                                    <span><strong>Success:</strong> {{ log.success }}</span>
+                                    <span><strong>IP:</strong> {{ log.ip_address or 'unknown' }}</span>
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-state" style="padding: 40px; text-align: center;">
+                    <p>No audit logs yet</p>
+                    <p style="font-size: 13px; color: var(--text-muted); margin-top: 8px;">
+                        Activity will appear here as you use PIKA
+                    </p>
+                </div>
+            {% endif %}
+        </div>
     </div>
-
-    {% if logs %}
-        {% for log in logs %}
-        <div class="log-entry">
-            <div class="log-entry-header">
-                <span class="log-event log-event-{{ log.event }}">{{ log.event }}</span>
-                <span class="log-timestamp">{{ log.timestamp }}</span>
-            </div>
-            <div class="log-content">
-                {% if log.event == 'query' %}
-                    <strong>Question:</strong> {{ log.question[:100] }}{% if log.question|length > 100 %}...{% endif %}<br>
-                    <strong>Model:</strong> {{ log.model }} |
-                    <strong>Confidence:</strong> {{ log.confidence }} |
-                    <strong>Sources:</strong> {{ log.sources|length }}
-                    {% if log.error %}<br><strong>Error:</strong> {{ log.error }}{% endif %}
-                {% elif log.event == 'admin' %}
-                    <strong>Action:</strong> {{ log.action }}
-                    {% if log.details %}
-                        <br><strong>Details:</strong>
-                        {% for key, value in log.details.items() %}
-                            {{ key }}={{ value }}{% if not loop.last %}, {% endif %}
-                        {% endfor %}
-                    {% endif %}
-                {% elif log.event == 'auth' %}
-                    <strong>Action:</strong> {{ log.action }} |
-                    <strong>Success:</strong> {{ log.success }} |
-                    <strong>IP:</strong> {{ log.ip_address or 'unknown' }}
-                {% else %}
-                    {{ log }}
-                {% endif %}
-            </div>
-        </div>
-        {% endfor %}
-    {% else %}
-        <div class="logs-empty">
-            <p>No audit logs yet</p>
-        </div>
-    {% endif %}
 </div>
 {% endblock %}

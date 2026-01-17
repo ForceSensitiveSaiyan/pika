@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}PIKA - Setup{% endblock %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card" style="max-width: 480px;">
+        <div class="login-header">
+            <a href="/" class="logo">PIKA</a>
+            <p class="login-subtitle">Welcome! Let's set up your instance.</p>
+        </div>
+
+        {% if error %}
+        <div class="login-error">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form class="setup-form" method="POST" action="/setup">
+            <div class="setup-section">
+                <h3 class="setup-section-title">Admin Credentials</h3>
+                <p class="setup-section-desc">Create credentials to protect your admin panel.</p>
+
+                <div class="form-group">
+                    <label class="form-label" for="username">Username</label>
+                    <input
+                        type="text"
+                        id="username"
+                        name="username"
+                        class="form-input"
+                        placeholder="admin"
+                        value="{{ username or '' }}"
+                        required
+                        autofocus
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="password">Password</label>
+                    <input
+                        type="password"
+                        id="password"
+                        name="password"
+                        class="form-input"
+                        placeholder="Choose a strong password"
+                        required
+                        minlength="6"
+                    >
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="password_confirm">Confirm Password</label>
+                    <input
+                        type="password"
+                        id="password_confirm"
+                        name="password_confirm"
+                        class="form-input"
+                        placeholder="Confirm your password"
+                        required
+                    >
+                </div>
+            </div>
+
+            <div class="setup-section">
+                <h3 class="setup-section-title">API Access (Optional)</h3>
+                <p class="setup-section-desc">Generate an API key to access PIKA programmatically.</p>
+
+                <div class="form-group">
+                    <label class="form-check">
+                        <input type="checkbox" name="generate_api_key" id="generate_api_key">
+                        <span class="form-check-label">Generate API key</span>
+                    </label>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary login-btn">
+                Complete Setup
+            </button>
+        </form>
+
+        <p class="setup-note">
+            You can change these settings later via environment variables.
+        </p>
+    </div>
+</div>
+{% endblock %}

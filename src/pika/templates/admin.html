@@ -30,42 +30,54 @@
             Logout
         </a>
         {% endif %}
-        <a href="/" class="header-link">
+        <a href="/" class="header-link header-link-primary">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M19 12H5M12 19l-7-7 7-7"/>
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
             Chat
         </a>
     </div>
 </header>
 
-<!-- Admin Layout -->
-<div class="admin-layout">
-    <div class="admin-grid">
+<!-- Admin Content -->
+<div class="admin-container">
+    <div class="admin-content">
         <!-- Models Section -->
-        <div class="card">
-            <div class="card-header">
-                <h2 class="card-title">Models</h2>
+        <section class="admin-section">
+            <div class="section-header">
+                <div class="section-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                        <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                    </svg>
+                </div>
+                <div class="section-title-group">
+                    <h2 class="section-title">Models</h2>
+                    <p class="section-desc">Manage your AI models</p>
+                </div>
             </div>
-            <div class="card-body">
+
+            <div class="section-body">
                 <!-- Current Model -->
-                <div class="model-current" id="current-model">
-                    <span class="model-current-name" id="current-model-name">Loading...</span>
-                    <span class="badge badge-success">
-                        <span class="badge-dot"></span>
-                        Active
+                <div class="current-model-card" id="current-model">
+                    <div class="current-model-info">
+                        <span class="current-model-label">Active Model</span>
+                        <span class="current-model-name" id="current-model-name">Loading...</span>
+                    </div>
+                    <span class="status-badge status-active">
+                        <span class="status-dot"></span>
+                        Running
                     </span>
                 </div>
 
                 <!-- Switch Model -->
-                <div class="form-group">
+                <div class="form-section">
                     <label class="form-label">Switch Model</label>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <select id="model-select" class="form-select">
-                                <option value="">Loading models...</option>
-                            </select>
-                        </div>
+                    <div class="input-group">
+                        <select id="model-select" class="form-select">
+                            <option value="">Loading models...</option>
+                        </select>
                         <button class="btn btn-primary" id="switch-model-btn" onclick="switchModel()">
                             Switch
                         </button>
@@ -73,17 +85,15 @@
                 </div>
 
                 <!-- Pull New Model -->
-                <div class="form-group" style="margin-top: 20px;">
+                <div class="form-section">
                     <label class="form-label">Pull New Model</label>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <input
-                                type="text"
-                                id="model-name"
-                                class="form-input"
-                                placeholder="e.g., llama3.1:8b"
-                            >
-                        </div>
+                    <div class="input-group">
+                        <input
+                            type="text"
+                            id="model-name"
+                            class="form-input"
+                            placeholder="e.g., llama3.1:8b"
+                        >
                         <button class="btn btn-secondary" id="pull-model-btn" onclick="pullModel()">
                             Pull
                         </button>
@@ -94,42 +104,61 @@
                 </div>
 
                 <!-- Pull Progress -->
-                <div class="progress-container" id="pull-progress">
+                <div class="progress-card" id="pull-progress">
                     <div class="progress-bar">
                         <div class="progress-fill" id="progress-fill"></div>
                     </div>
                     <p class="progress-text" id="progress-text">Starting download...</p>
                 </div>
             </div>
-        </div>
+        </section>
 
         <!-- Documents Section -->
-        <div class="card">
-            <div class="card-header">
-                <h2 class="card-title">Documents</h2>
+        <section class="admin-section">
+            <div class="section-header">
+                <div class="section-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                </div>
+                <div class="section-title-group">
+                    <h2 class="section-title">Documents</h2>
+                    <p class="section-desc">Upload and manage your knowledge base</p>
+                </div>
                 <button class="btn btn-primary" id="refresh-index-btn" onclick="refreshIndex()">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
                     Refresh Index
                 </button>
             </div>
-            <div class="card-body">
+
+            <div class="section-body">
                 <!-- Upload Zone -->
                 <div class="upload-zone" id="upload-zone">
                     <input type="file" id="file-input" multiple accept=".pdf,.docx,.txt,.md" hidden>
-                    <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="17 8 12 3 7 8"></polyline>
-                        <line x1="12" y1="3" x2="12" y2="15"></line>
-                    </svg>
+                    <div class="upload-icon-wrapper">
+                        <svg class="upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                    </div>
                     <p class="upload-text">Drop files here or click to browse</p>
-                    <p class="upload-hint">PDF, DOCX, TXT, MD supported</p>
+                    <p class="upload-hint">Supports PDF, DOCX, TXT, and Markdown files</p>
                 </div>
 
                 <!-- Document List -->
-                <div class="document-list">
-                    <table class="document-table">
+                <div class="documents-card">
+                    <table class="documents-table">
                         <thead>
                             <tr>
-                                <th>Name</th>
+                                <th>Document</th>
                                 <th>Size</th>
                                 <th>Chunks</th>
                                 <th></th>
@@ -137,25 +166,25 @@
                         </thead>
                         <tbody id="document-tbody">
                             <tr>
-                                <td colspan="4" class="empty-state">No documents uploaded</td>
+                                <td colspan="4" class="empty-state">No documents uploaded yet</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
 
                 <!-- Stats -->
-                <div class="stats-row">
-                    <div class="stat-item">
+                <div class="stats-cards">
+                    <div class="stat-card">
                         <span class="stat-value" id="doc-count">0</span>
-                        <span class="stat-label">documents</span>
+                        <span class="stat-label">Documents</span>
                     </div>
-                    <div class="stat-item">
+                    <div class="stat-card">
                         <span class="stat-value" id="chunk-count">0</span>
-                        <span class="stat-label">chunks indexed</span>
+                        <span class="stat-label">Chunks Indexed</span>
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
     </div>
 </div>
 
@@ -401,7 +430,7 @@
             if (documents.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="4" class="empty-state">No documents uploaded</td>
+                        <td colspan="4" class="empty-state">No documents uploaded yet</td>
                     </tr>
                 `;
                 return;
@@ -452,7 +481,13 @@
             showToast('Failed to refresh index', 'error');
         } finally {
             btn.disabled = false;
-            btn.textContent = 'Refresh Index';
+            btn.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                </svg>
+                Refresh Index
+            `;
         }
     }
 

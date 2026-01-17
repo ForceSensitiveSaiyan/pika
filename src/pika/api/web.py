@@ -1,5 +1,6 @@
 """Web interface routes for PIKA."""
 
+import hashlib
 import secrets
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from pika.config import Settings, get_settings
+from pika.services.app_config import get_app_config
 from pika.services.audit import get_audit_logger
 from pika.services.documents import DocumentInfo, DocumentProcessor, get_document_processor
 
@@ -21,10 +23,25 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _sessions: dict[str, bool] = {}
 
 
+def hash_password(password: str) -> str:
+    """Hash a password using SHA-256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def is_setup_required() -> bool:
+    """Check if initial setup is required."""
+    settings = get_settings()
+    config = get_app_config()
+    # Setup is required if no env password AND no stored credentials
+    return settings.pika_admin_password is None and not config.is_setup_complete()
+
+
 def is_admin_auth_required() -> bool:
     """Check if admin authentication is required."""
     settings = get_settings()
-    return settings.pika_admin_password is not None
+    config = get_app_config()
+    # Auth required if env password set OR stored credentials exist
+    return settings.pika_admin_password is not None or config.is_setup_complete()
 
 
 def is_authenticated(request: Request) -> bool:
@@ -33,6 +50,24 @@ def is_authenticated(request: Request) -> bool:
         return True
     session_id = request.cookies.get("pika_session")
     return session_id is not None and _sessions.get(session_id, False)
+
+
+def verify_password(password: str) -> bool:
+    """Verify password against env var or stored credentials."""
+    settings = get_settings()
+    config = get_app_config()
+
+    # Check env var first
+    if settings.pika_admin_password:
+        return secrets.compare_digest(password, settings.pika_admin_password)
+
+    # Check stored credentials
+    creds = config.get_admin_credentials()
+    if creds:
+        password_hash = hash_password(password)
+        return secrets.compare_digest(password_hash, creds["password_hash"])
+
+    return False
 
 
 def require_admin_auth(request: Request) -> bool:
@@ -53,12 +88,18 @@ def get_client_ip(request: Request) -> str:
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Serve the main chat interface."""
+    # Redirect to setup if first launch
+    if is_setup_required():
+        return RedirectResponse(url="/setup", status_code=302)
     return templates.TemplateResponse("index.html", {"request": request})
 
 
 @router.get("/admin", response_class=HTMLResponse)
 async def admin(request: Request):
     """Serve the admin interface."""
+    # Redirect to setup if first launch
+    if is_setup_required():
+        return RedirectResponse(url="/setup", status_code=302)
     if is_admin_auth_required() and not is_authenticated(request):
         return RedirectResponse(url="/admin/login", status_code=302)
     return templates.TemplateResponse("admin.html", {
@@ -70,6 +111,9 @@ async def admin(request: Request):
 @router.get("/admin/login", response_class=HTMLResponse)
 async def admin_login_page(request: Request):
     """Serve the admin login page."""
+    # Redirect to setup if first launch
+    if is_setup_required():
+        return RedirectResponse(url="/setup", status_code=302)
     if not is_admin_auth_required():
         return RedirectResponse(url="/admin", status_code=302)
     if is_authenticated(request):
@@ -80,14 +124,17 @@ async def admin_login_page(request: Request):
 @router.post("/admin/login")
 async def admin_login(request: Request, password: str = Form(...)):
     """Handle admin login."""
-    settings = get_settings()
     audit = get_audit_logger()
     client_ip = get_client_ip(request)
+
+    # Redirect to setup if first launch
+    if is_setup_required():
+        return RedirectResponse(url="/setup", status_code=302)
 
     if not is_admin_auth_required():
         return RedirectResponse(url="/admin", status_code=302)
 
-    if secrets.compare_digest(password, settings.pika_admin_password):
+    if verify_password(password):
         # Create session
         session_id = secrets.token_urlsafe(32)
         _sessions[session_id] = True
@@ -124,6 +171,72 @@ async def admin_logout(request: Request):
 
     response = RedirectResponse(url="/", status_code=302)
     response.delete_cookie("pika_session")
+    return response
+
+
+@router.get("/setup", response_class=HTMLResponse)
+async def setup_page(request: Request):
+    """Serve the setup page for first launch."""
+    if not is_setup_required():
+        return RedirectResponse(url="/admin", status_code=302)
+    return templates.TemplateResponse("setup.html", {"request": request, "error": None})
+
+
+@router.post("/setup")
+async def setup_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    password_confirm: str = Form(...),
+    generate_api_key: bool = Form(False),
+):
+    """Handle setup form submission."""
+    if not is_setup_required():
+        return RedirectResponse(url="/admin", status_code=302)
+
+    # Validate passwords match
+    if password != password_confirm:
+        return templates.TemplateResponse(
+            "setup.html",
+            {"request": request, "error": "Passwords do not match", "username": username},
+            status_code=400,
+        )
+
+    # Validate password length
+    if len(password) < 6:
+        return templates.TemplateResponse(
+            "setup.html",
+            {"request": request, "error": "Password must be at least 6 characters", "username": username},
+            status_code=400,
+        )
+
+    # Store credentials
+    config = get_app_config()
+    password_hash = hash_password(password)
+    config.set_admin_credentials(username, password_hash)
+
+    # Generate API key if requested
+    api_key = None
+    if generate_api_key:
+        api_key = secrets.token_urlsafe(32)
+        config.set_api_key(api_key)
+
+    # Log the setup
+    audit = get_audit_logger()
+    audit.log_admin_action("setup_complete", {"username": username, "api_key_generated": generate_api_key})
+
+    # Create session and redirect to admin
+    session_id = secrets.token_urlsafe(32)
+    _sessions[session_id] = True
+
+    response = RedirectResponse(url="/admin", status_code=302)
+    response.set_cookie(
+        key="pika_session",
+        value=session_id,
+        httponly=True,
+        samesite="lax",
+        max_age=86400,
+    )
     return response
 
 
