@@ -1,12 +1,14 @@
 """API routes for PIKA."""
 
+import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from pika.services.ollama import OllamaClient, get_ollama_client
-from pika.services.rag import RAGEngine, get_rag_engine, Confidence
+from pika.services.app_config import get_app_config, AppConfigService
+from pika.services.ollama import OllamaClient, get_ollama_client, _format_size
+from pika.services.rag import RAGEngine, get_rag_engine, Confidence, IndexedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -48,15 +50,90 @@ async def health_check(
     )
 
 
-@router.get("/models")
+class ModelResponse(BaseModel):
+    """Response model for a single model."""
+
+    name: str
+    size: str
+    size_bytes: int
+    is_current: bool
+
+
+class CurrentModelResponse(BaseModel):
+    """Response model for the current model."""
+
+    model: str
+
+
+class SetModelRequest(BaseModel):
+    """Request model for setting the current model."""
+
+    model: str
+
+
+class PullModelRequest(BaseModel):
+    """Request model for pulling a new model."""
+
+    model: str
+
+
+@router.get("/models", response_model=list[ModelResponse])
 async def list_models(
     ollama: OllamaClient = Depends(get_ollama_client),
-) -> list[dict]:
+    config: AppConfigService = Depends(get_app_config),
+) -> list[ModelResponse]:
     """List available Ollama models."""
     try:
-        return await ollama.list_models()
+        models = await ollama.list_models()
+        current_model = config.get_current_model()
+        return [
+            ModelResponse(
+                name=m.name,
+                size=_format_size(m.size),
+                size_bytes=m.size,
+                is_current=(m.name == current_model),
+            )
+            for m in models
+        ]
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Ollama unavailable: {e}")
+
+
+@router.get("/models/current", response_model=CurrentModelResponse)
+async def get_current_model(
+    config: AppConfigService = Depends(get_app_config),
+) -> CurrentModelResponse:
+    """Get the currently active model."""
+    return CurrentModelResponse(model=config.get_current_model())
+
+
+@router.post("/models/current", response_model=CurrentModelResponse)
+async def set_current_model(
+    request: SetModelRequest,
+    config: AppConfigService = Depends(get_app_config),
+) -> CurrentModelResponse:
+    """Set the current model."""
+    config.set_current_model(request.model)
+    return CurrentModelResponse(model=request.model)
+
+
+@router.post("/models/pull")
+async def pull_model(
+    request: PullModelRequest,
+    ollama: OllamaClient = Depends(get_ollama_client),
+) -> StreamingResponse:
+    """Pull a new model from Ollama registry."""
+    async def generate_progress():
+        try:
+            async for progress in ollama.pull_model(request.model):
+                yield f"data: {json.dumps(progress)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate_progress(),
+        media_type="text/event-stream",
+    )
 
 
 @router.post("/generate", response_model=GenerateResponse)
@@ -106,6 +183,13 @@ class IndexStatsResponse(BaseModel):
     total_documents: int
     total_chunks: int
     collection_name: str
+
+
+class IndexedDocumentResponse(BaseModel):
+    """Response model for an indexed document."""
+
+    filename: str
+    chunk_count: int
 
 
 class QueryRequest(BaseModel):
@@ -162,6 +246,24 @@ async def get_index_stats(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {e}")
+
+
+@router.get("/documents", response_model=list[IndexedDocumentResponse])
+async def get_indexed_documents(
+    rag: RAGEngine = Depends(get_rag_engine),
+) -> list[IndexedDocumentResponse]:
+    """Get list of indexed documents with their chunk counts."""
+    try:
+        documents = rag.get_indexed_documents()
+        return [
+            IndexedDocumentResponse(
+                filename=doc.filename,
+                chunk_count=doc.chunk_count,
+            )
+            for doc in documents
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get documents: {e}")
 
 
 @router.post("/query", response_model=QueryResponse)

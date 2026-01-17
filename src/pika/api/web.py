@@ -22,6 +22,12 @@ async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+@router.get("/admin", response_class=HTMLResponse)
+async def admin(request: Request):
+    """Serve the admin interface."""
+    return templates.TemplateResponse("admin.html", {"request": request})
+
+
 @router.get("/documents")
 async def list_documents(
     processor: DocumentProcessor = Depends(get_document_processor),

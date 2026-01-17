@@ -50,6 +50,14 @@ class IndexStats:
     collection_name: str
 
 
+@dataclass
+class IndexedDocument:
+    """Information about an indexed document."""
+
+    filename: str
+    chunk_count: int
+
+
 class RAGEngine:
     """RAG engine with ChromaDB vector store and sentence-transformers embeddings."""
 
@@ -184,6 +192,25 @@ class RAGEngine:
             collection_name=self.COLLECTION_NAME,
         )
 
+    def get_indexed_documents(self) -> list[IndexedDocument]:
+        """Get list of indexed documents with their chunk counts."""
+        if self.collection.count() == 0:
+            return []
+
+        results = self.collection.get(include=["metadatas"])
+
+        # Count chunks per document
+        chunk_counts: dict[str, int] = {}
+        for metadata in results["metadatas"]:
+            source = metadata["source"]
+            chunk_counts[source] = chunk_counts.get(source, 0) + 1
+
+        # Sort by filename
+        return [
+            IndexedDocument(filename=filename, chunk_count=count)
+            for filename, count in sorted(chunk_counts.items())
+        ]
+
     def clear_index(self) -> None:
         """Clear all documents from the index."""
         try:
@@ -202,9 +229,14 @@ class RAGEngine:
         top_k = top_k or self.settings.top_k
 
         # Check if index has documents
-        if self.collection.count() == 0:
+        try:
+            doc_count = self.collection.count()
+        except Exception:
+            doc_count = 0
+
+        if doc_count == 0:
             return QueryResult(
-                answer="No documents have been indexed yet. Please index documents first.",
+                answer="No documents indexed yet. Upload documents and click Refresh Index.",
                 sources=[],
                 confidence=Confidence.NONE,
             )

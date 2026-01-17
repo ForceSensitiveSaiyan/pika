@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+
+{% block title %}PIKA - Admin{% endblock %}
+
+{% block content %}
+<div class="admin-container">
+    <header class="admin-header">
+        <div class="header-left">
+            <h1 class="logo">PIKA</h1>
+            <span class="header-divider">/</span>
+            <span class="header-section">Admin</span>
+        </div>
+        <a href="/" class="btn btn-back">Back to Chat</a>
+    </header>
+
+    <main class="admin-content">
+        <section class="admin-section">
+            <div class="section-header">
+                <h2>Models</h2>
+            </div>
+            <div class="section-body">
+                <div class="model-selector">
+                    <label for="model-select">Active Model</label>
+                    <div class="select-row">
+                        <select id="model-select" class="form-select">
+                            <option value="">Loading models...</option>
+                        </select>
+                        <button class="btn btn-primary" id="switch-model-btn" onclick="switchModel()">
+                            Switch Model
+                        </button>
+                    </div>
+                </div>
+
+                <div class="model-pull">
+                    <label for="model-name">Pull New Model</label>
+                    <div class="input-row">
+                        <input
+                            type="text"
+                            id="model-name"
+                            class="form-input"
+                            placeholder="e.g., qwen2.5:7b, llama3.1:8b"
+                        >
+                        <button class="btn btn-primary" id="pull-model-btn" onclick="pullModel()">
+                            Pull Model
+                        </button>
+                    </div>
+                    <p class="help-text">
+                        Enter a model name from <a href="https://ollama.com/library" target="_blank">Ollama Library</a>
+                    </p>
+                </div>
+
+                <div id="pull-progress" class="pull-progress hidden">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <p class="progress-status" id="progress-status">Preparing...</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="admin-section">
+            <div class="section-header">
+                <h2>Documents</h2>
+                <button class="btn btn-primary" id="refresh-index" onclick="refreshIndex()">
+                    Refresh Index
+                </button>
+            </div>
+            <div class="section-body">
+                <div class="stats" id="stats">
+                    <div class="stat">
+                        <span class="stat-value" id="doc-count">-</span>
+                        <span class="stat-label">Documents</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value" id="chunk-count">-</span>
+                        <span class="stat-label">Chunks</span>
+                    </div>
+                </div>
+
+                <div class="upload-area" id="upload-area">
+                    <input type="file" id="file-input" multiple accept=".pdf,.docx,.txt,.md" hidden>
+                    <div class="upload-content">
+                        <span class="upload-icon">+</span>
+                        <p>Drop files here or click to upload</p>
+                        <p class="upload-hint">PDF, DOCX, TXT, MD</p>
+                    </div>
+                </div>
+
+                <div class="document-table-container">
+                    <table class="document-table" id="document-table">
+                        <thead>
+                            <tr>
+                                <th>Filename</th>
+                                <th>Size</th>
+                                <th>Chunks</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="document-tbody">
+                            <tr class="no-documents">
+                                <td colspan="4">No documents uploaded</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+        loadModels();
+        loadDocuments();
+        loadStats();
+        setupUpload();
+    });
+
+    // --- Models ---
+
+    async function loadModels() {
+        try {
+            const response = await fetch('/api/v1/models');
+            const models = await response.json();
+            const select = document.getElementById('model-select');
+
+            select.innerHTML = models.map(m => `
+                <option value="${m.name}" ${m.is_current ? 'selected' : ''}>
+                    ${m.name} (${m.size})${m.is_current ? ' - Active' : ''}
+                </option>
+            `).join('');
+
+            if (models.length === 0) {
+                select.innerHTML = '<option value="">No models available</option>';
+            }
+        } catch (error) {
+            console.error('Failed to load models:', error);
+        }
+    }
+
+    async function switchModel() {
+        const select = document.getElementById('model-select');
+        const model = select.value;
+        if (!model) return;
+
+        const btn = document.getElementById('switch-model-btn');
+        btn.disabled = true;
+        btn.textContent = 'Switching...';
+
+        try {
+            const response = await fetch('/api/v1/models/current', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model })
+            });
+
+            if (!response.ok) throw new Error('Failed to switch model');
+
+            await loadModels();
+            showMessage('Model switched to ' + model, 'success');
+        } catch (error) {
+            showMessage('Failed to switch model: ' + error.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Switch Model';
+        }
+    }
+
+    async function pullModel() {
+        const input = document.getElementById('model-name');
+        const modelName = input.value.trim();
+        if (!modelName) return;
+
+        const btn = document.getElementById('pull-model-btn');
+        const progress = document.getElementById('pull-progress');
+        const progressFill = document.getElementById('progress-fill');
+        const progressStatus = document.getElementById('progress-status');
+
+        btn.disabled = true;
+        progress.classList.remove('hidden');
+        progressFill.style.width = '0%';
+        progressStatus.textContent = 'Starting pull...';
+
+        try {
+            const response = await fetch('/api/v1/models/pull', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelName })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const text = decoder.decode(value);
+                const lines = text.split('\n').filter(l => l.startsWith('data: '));
+
+                for (const line of lines) {
+                    const data = JSON.parse(line.slice(6));
+
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+
+                    if (data.total && data.completed) {
+                        const percent = Math.round((data.completed / data.total) * 100);
+                        progressFill.style.width = percent + '%';
+                        progressStatus.textContent = `Downloading: ${percent}%`;
+                    } else if (data.status) {
+                        progressStatus.textContent = data.status;
+                        if (data.status === 'success') {
+                            progressFill.style.width = '100%';
+                        }
+                    }
+                }
+            }
+
+            input.value = '';
+            await loadModels();
+            showMessage('Model ' + modelName + ' pulled successfully', 'success');
+        } catch (error) {
+            showMessage('Failed to pull model: ' + error.message, 'error');
+        } finally {
+            btn.disabled = false;
+            setTimeout(() => {
+                progress.classList.add('hidden');
+            }, 2000);
+        }
+    }
+
+    // --- Documents ---
+
+    async function loadDocuments() {
+        try {
+            const [docsResponse, indexedResponse] = await Promise.all([
+                fetch('/documents'),
+                fetch('/api/v1/documents')
+            ]);
+
+            const documents = await docsResponse.json();
+            const indexed = await indexedResponse.json();
+
+            // Create a map of indexed documents for quick lookup
+            const indexedMap = {};
+            indexed.forEach(d => indexedMap[d.filename] = d.chunk_count);
+
+            const tbody = document.getElementById('document-tbody');
+
+            if (documents.length === 0) {
+                tbody.innerHTML = `
+                    <tr class="no-documents">
+                        <td colspan="4">No documents uploaded</td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = documents.map(doc => `
+                <tr>
+                    <td class="doc-name" title="${doc.filename}">${doc.filename}</td>
+                    <td class="doc-size">${formatSize(doc.size_bytes)}</td>
+                    <td class="doc-chunks">${indexedMap[doc.filename] || '-'}</td>
+                    <td class="doc-actions">
+                        <button class="btn-delete" onclick="deleteDocument('${doc.filename}')" title="Delete">×</button>
+                    </td>
+                </tr>
+            `).join('');
+        } catch (error) {
+            console.error('Failed to load documents:', error);
+        }
+    }
+
+    async function loadStats() {
+        try {
+            const response = await fetch('/api/v1/index/stats');
+            const stats = await response.json();
+            document.getElementById('doc-count').textContent = stats.total_documents;
+            document.getElementById('chunk-count').textContent = stats.total_chunks;
+        } catch (error) {
+            console.error('Failed to load stats:', error);
+        }
+    }
+
+    async function refreshIndex() {
+        const btn = document.getElementById('refresh-index');
+        btn.disabled = true;
+        btn.textContent = 'Indexing...';
+
+        try {
+            const response = await fetch('/api/v1/index', { method: 'POST' });
+            const result = await response.json();
+            await Promise.all([loadStats(), loadDocuments()]);
+            showMessage(`Indexed ${result.total_documents} documents (${result.total_chunks} chunks)`, 'success');
+        } catch (error) {
+            showMessage('Failed to refresh index: ' + error.message, 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Refresh Index';
+        }
+    }
+
+    function setupUpload() {
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('file-input');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', () => {
+            handleFiles(fileInput.files);
+            fileInput.value = '';
+        });
+    }
+
+    async function handleFiles(files) {
+        for (const file of files) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Upload failed');
+                }
+
+                showMessage(`Uploaded: ${file.name}`, 'success');
+            } catch (error) {
+                showMessage(`Failed to upload ${file.name}: ${error.message}`, 'error');
+            }
+        }
+        await loadDocuments();
+    }
+
+    async function deleteDocument(filename) {
+        if (!confirm(`Delete "${filename}"?`)) return;
+
+        try {
+            const response = await fetch(`/documents/${encodeURIComponent(filename)}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) throw new Error('Delete failed');
+
+            showMessage(`Deleted: ${filename}`, 'success');
+            await loadDocuments();
+        } catch (error) {
+            showMessage(`Failed to delete: ${error.message}`, 'error');
+        }
+    }
+
+    // --- Utilities ---
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function showMessage(text, type = 'info') {
+        // Remove existing messages
+        document.querySelectorAll('.toast-message').forEach(el => el.remove());
+
+        const toast = document.createElement('div');
+        toast.className = `toast-message toast-${type}`;
+        toast.textContent = text;
+        document.body.appendChild(toast);
+
+        setTimeout(() => toast.classList.add('show'), 10);
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+</script>
+{% endblock %}

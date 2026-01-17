@@ -10,7 +10,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-MODEL="${OLLAMA_MODEL:-mistral:7b}"
+MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
 PIKA_PORT="${PIKA_PORT:-8000}"
 
 echo -e "${BLUE}"

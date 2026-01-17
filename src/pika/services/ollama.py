@@ -1,13 +1,25 @@
 """Ollama client service for LLM interactions."""
 
+import json
 import logging
+from dataclasses import dataclass
 from typing import AsyncIterator
 
 import httpx
 
 from pika.config import Settings, get_settings
+from pika.services.app_config import get_app_config
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ModelInfo:
+    """Information about an Ollama model."""
+
+    name: str
+    size: int
+    modified_at: str
 
 
 def _make_timeout(seconds: int) -> httpx.Timeout:
@@ -20,14 +32,30 @@ def _make_timeout(seconds: int) -> httpx.Timeout:
     )
 
 
+def _format_size(size_bytes: int) -> str:
+    """Format size in bytes to human readable string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+
 class OllamaClient:
     """Async client for interacting with Ollama API."""
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
         self.base_url = self.settings.ollama_base_url
-        self.model = self.settings.ollama_model
         self.timeout = self.settings.ollama_timeout
+
+    @property
+    def model(self) -> str:
+        """Get the current model from app config."""
+        return get_app_config().get_current_model()
 
     async def health_check(self) -> bool:
         """Check if Ollama is running and accessible."""
@@ -38,13 +66,39 @@ class OllamaClient:
         except httpx.RequestError:
             return False
 
-    async def list_models(self) -> list[dict]:
+    async def list_models(self) -> list[ModelInfo]:
         """List available models in Ollama."""
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(f"{self.base_url}/api/tags")
             response.raise_for_status()
             data = response.json()
-            return data.get("models", [])
+            models = []
+            for m in data.get("models", []):
+                models.append(ModelInfo(
+                    name=m.get("name", ""),
+                    size=m.get("size", 0),
+                    modified_at=m.get("modified_at", ""),
+                ))
+            return models
+
+    async def pull_model(self, model_name: str) -> AsyncIterator[dict]:
+        """Pull a model from Ollama registry, yielding progress updates."""
+        payload = {"name": model_name, "stream": True}
+
+        # Use a very long timeout for model pulls (can take a while)
+        timeout = httpx.Timeout(connect=30.0, read=600.0, write=30.0, pool=30.0)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/api/pull",
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line:
+                        data = json.loads(line)
+                        yield data
 
     async def generate(
         self,
@@ -97,7 +151,6 @@ class OllamaClient:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if line:
-                        import json
                         data = json.loads(line)
                         if "response" in data:
                             yield data["response"]

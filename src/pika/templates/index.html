@@ -3,55 +3,20 @@
 {% block title %}PIKA - Chat{% endblock %}
 
 {% block content %}
-<aside class="sidebar">
-    <div class="sidebar-header">
-        <h1 class="logo">PIKA</h1>
-        <p class="tagline">Document Intelligence</p>
-    </div>
-
-    <div class="sidebar-section">
-        <div class="section-header">
-            <h2>Index Status</h2>
-        </div>
-        <div class="stats" id="stats">
-            <div class="stat">
-                <span class="stat-value" id="doc-count">-</span>
-                <span class="stat-label">Documents</span>
-            </div>
-            <div class="stat">
-                <span class="stat-value" id="chunk-count">-</span>
-                <span class="stat-label">Chunks</span>
-            </div>
-        </div>
-        <button class="btn btn-primary" id="refresh-index" onclick="refreshIndex()">
-            Refresh Index
-        </button>
-    </div>
-
-    <div class="sidebar-section">
-        <div class="section-header">
-            <h2>Documents</h2>
-        </div>
-        <div class="upload-area" id="upload-area">
-            <input type="file" id="file-input" multiple accept=".pdf,.docx,.txt,.md" hidden>
-            <div class="upload-content">
-                <span class="upload-icon">+</span>
-                <p>Drop files here or click to upload</p>
-                <p class="upload-hint">PDF, DOCX, TXT, MD</p>
-            </div>
-        </div>
-        <ul class="document-list" id="document-list">
-            <!-- Documents loaded via JS -->
-        </ul>
-    </div>
-</aside>
+<a href="/admin" class="admin-link">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+    Admin
+</a>
 
 <main class="chat-container">
     <div class="chat-messages" id="chat-messages">
         <div class="welcome-message">
             <h2>Welcome to PIKA</h2>
-            <p>Upload documents and ask questions about their content.</p>
-            <p>Start by dropping some files in the sidebar, then click "Refresh Index" to index them.</p>
+            <p>Ask questions about your indexed documents.</p>
+            <p class="welcome-hint">Upload and index documents in the <a href="/admin">Admin</a> section.</p>
         </div>
     </div>
 
@@ -74,139 +39,6 @@
 <script>
     // State
     let isLoading = false;
-
-    // Initialize
-    document.addEventListener('DOMContentLoaded', () => {
-        loadDocuments();
-        loadStats();
-        setupUpload();
-    });
-
-    // Load documents list
-    async function loadDocuments() {
-        try {
-            const response = await fetch('/documents');
-            const documents = await response.json();
-            const list = document.getElementById('document-list');
-
-            if (documents.length === 0) {
-                list.innerHTML = '<li class="no-documents">No documents yet</li>';
-                return;
-            }
-
-            list.innerHTML = documents.map(doc => `
-                <li class="document-item">
-                    <span class="document-name" title="${doc.filename}">${doc.filename}</span>
-                    <span class="document-size">${formatSize(doc.size_bytes)}</span>
-                    <button class="btn-delete" onclick="deleteDocument('${doc.filename}')" title="Delete">×</button>
-                </li>
-            `).join('');
-        } catch (error) {
-            console.error('Failed to load documents:', error);
-        }
-    }
-
-    // Load index stats
-    async function loadStats() {
-        try {
-            const response = await fetch('/api/v1/index/stats');
-            const stats = await response.json();
-            document.getElementById('doc-count').textContent = stats.total_documents;
-            document.getElementById('chunk-count').textContent = stats.total_chunks;
-        } catch (error) {
-            console.error('Failed to load stats:', error);
-        }
-    }
-
-    // Refresh index
-    async function refreshIndex() {
-        const btn = document.getElementById('refresh-index');
-        btn.disabled = true;
-        btn.textContent = 'Indexing...';
-
-        try {
-            const response = await fetch('/api/v1/index', { method: 'POST' });
-            const result = await response.json();
-            await loadStats();
-            addSystemMessage(`Indexed ${result.total_documents} documents (${result.total_chunks} chunks)`);
-        } catch (error) {
-            addSystemMessage('Failed to refresh index: ' + error.message, true);
-        } finally {
-            btn.disabled = false;
-            btn.textContent = 'Refresh Index';
-        }
-    }
-
-    // Setup file upload
-    function setupUpload() {
-        const uploadArea = document.getElementById('upload-area');
-        const fileInput = document.getElementById('file-input');
-
-        uploadArea.addEventListener('click', () => fileInput.click());
-
-        uploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
-
-        uploadArea.addEventListener('dragleave', () => {
-            uploadArea.classList.remove('dragover');
-        });
-
-        uploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            handleFiles(e.dataTransfer.files);
-        });
-
-        fileInput.addEventListener('change', () => {
-            handleFiles(fileInput.files);
-            fileInput.value = '';
-        });
-    }
-
-    // Handle file uploads
-    async function handleFiles(files) {
-        for (const file of files) {
-            const formData = new FormData();
-            formData.append('file', file);
-
-            try {
-                const response = await fetch('/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Upload failed');
-                }
-
-                addSystemMessage(`Uploaded: ${file.name}`);
-            } catch (error) {
-                addSystemMessage(`Failed to upload ${file.name}: ${error.message}`, true);
-            }
-        }
-        await loadDocuments();
-    }
-
-    // Delete document
-    async function deleteDocument(filename) {
-        if (!confirm(`Delete "${filename}"?`)) return;
-
-        try {
-            const response = await fetch(`/documents/${encodeURIComponent(filename)}`, {
-                method: 'DELETE'
-            });
-
-            if (!response.ok) throw new Error('Delete failed');
-
-            addSystemMessage(`Deleted: ${filename}`);
-            await loadDocuments();
-        } catch (error) {
-            addSystemMessage(`Failed to delete: ${error.message}`, true);
-        }
-    }
 
     // Send question
     async function sendQuestion(event) {
@@ -301,18 +133,6 @@
         container.scrollTop = container.scrollHeight;
     }
 
-    // Add system message
-    function addSystemMessage(content, isError = false) {
-        const container = document.getElementById('chat-messages');
-        const div = document.createElement('div');
-        div.className = `system-message${isError ? ' error' : ''}`;
-        div.textContent = content;
-        container.appendChild(div);
-        container.scrollTop = container.scrollHeight;
-
-        setTimeout(() => div.remove(), 5000);
-    }
-
     // Remove message by ID
     function removeMessage(id) {
         const el = document.getElementById(id);
@@ -324,13 +144,6 @@
         const btn = document.getElementById('send-btn');
         btn.disabled = isLoading;
         btn.textContent = isLoading ? '...' : 'Send';
-    }
-
-    // Format file size
-    function formatSize(bytes) {
-        if (bytes < 1024) return bytes + ' B';
-        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
     // Escape HTML

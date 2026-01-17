@@ -42,14 +42,22 @@ docker compose exec ollama ollama pull mistral:7b
 
 ## Hardware Requirements
 
-| Component | Minimum | Recommended |
-|-----------|---------|-------------|
-| RAM | 8 GB | 16 GB |
+| Component | Minimum (Evaluation) | Recommended (Production) |
+|-----------|----------------------|--------------------------|
+| RAM | 8 GB | 16 GB+ |
 | Storage | 10 GB | 20 GB+ |
 | CPU | 4 cores | 8+ cores |
-| GPU | Not required | NVIDIA GPU (optional, for faster inference) |
+| GPU | Not required | **NVIDIA GPU (required)** |
 
-**Note:** Running LLMs locally is resource-intensive. The 7B parameter models (like Mistral 7B) require approximately 4-8 GB of RAM. Larger models require proportionally more resources.
+> **Important:** CPU-only mode is suitable for evaluation and testing only. For production use with acceptable response times, an NVIDIA GPU is required. Without a GPU, queries may take 30+ seconds to complete.
+
+### Model Recommendations
+
+| Use Case | Model | Size | Notes |
+|----------|-------|------|-------|
+| CPU evaluation | `phi3:mini` | 2.2 GB | Fastest on CPU, good for testing |
+| GPU production | `llama3.1:8b` | 4.7 GB | Recommended for production use |
+| GPU high quality | `llama3.1:70b` | 40 GB | Highest quality, requires more VRAM |
 
 ## Configuration
 
@@ -60,7 +68,7 @@ PIKA is configured via environment variables. Set these in your `docker-compose.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `llama3.2` | LLM model to use for generation |
+| `OLLAMA_MODEL` | `llama3.1:8b` | LLM model to use for generation |
 | `OLLAMA_TIMEOUT` | `120` | Timeout in seconds for LLM requests |
 | `DOCUMENTS_DIR` | `./documents` | Directory for uploaded documents |
 
