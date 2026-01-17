@@ -55,6 +55,44 @@
 <script>
     let isLoading = false;
     let messageCounter = 0;
+    let chatHistory = []; // {type, content, result?}
+
+    // Restore chat history on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        restoreChatHistory();
+    });
+
+    function saveChatHistory() {
+        sessionStorage.setItem('pika_chat_history', JSON.stringify(chatHistory));
+    }
+
+    function restoreChatHistory() {
+        const saved = sessionStorage.getItem('pika_chat_history');
+        if (!saved) return;
+
+        try {
+            chatHistory = JSON.parse(saved);
+            if (chatHistory.length === 0) return;
+
+            // Remove welcome message
+            const welcome = document.getElementById('welcome');
+            if (welcome) welcome.remove();
+
+            // Restore messages
+            for (const msg of chatHistory) {
+                if (msg.type === 'user') {
+                    addMessage(msg.content, 'user');
+                } else if (msg.type === 'assistant' && msg.result) {
+                    addAnswerMessage(msg.result);
+                } else if (msg.type === 'error') {
+                    addMessage(msg.content, 'error');
+                }
+            }
+        } catch (e) {
+            console.error('Failed to restore chat history:', e);
+            chatHistory = [];
+        }
+    }
 
     async function sendQuestion(event) {
         event.preventDefault();
@@ -74,6 +112,8 @@
 
         // Add user message
         addMessage(question, 'user');
+        chatHistory.push({ type: 'user', content: question });
+        saveChatHistory();
 
         // Add loading message
         const loadingId = addMessage('Thinking', 'assistant', true);
@@ -93,10 +133,14 @@
 
             removeMessage(loadingId);
             addAnswerMessage(result);
+            chatHistory.push({ type: 'assistant', result: result });
+            saveChatHistory();
 
         } catch (error) {
             removeMessage(loadingId);
             addMessage('Error: ' + error.message, 'error');
+            chatHistory.push({ type: 'error', content: 'Error: ' + error.message });
+            saveChatHistory();
         } finally {
             isLoading = false;
             updateSendButton();
