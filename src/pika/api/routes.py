@@ -86,6 +86,15 @@ async def list_models(
     try:
         models = await ollama.list_models()
         current_model = config.get_current_model()
+
+        # Check if current model exists in available models
+        model_names = [m.name for m in models]
+        if current_model not in model_names and models:
+            # Auto-select first available model
+            current_model = models[0].name
+            config.set_current_model(current_model)
+            logger.info(f"Auto-selected model: {current_model}")
+
         return [
             ModelResponse(
                 name=m.name,
