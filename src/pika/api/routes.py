@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from pika.services.app_config import get_app_config, AppConfigService
-from pika.services.ollama import OllamaClient, get_ollama_client, _format_size, get_active_pull
+from pika.services.ollama import OllamaClient, get_ollama_client, _format_size, get_active_pull, is_pull_running, start_pull_task
 from pika.services.rag import RAGEngine, get_rag_engine, Confidence, IndexedDocument
 
 logger = logging.getLogger(__name__)
@@ -126,23 +126,29 @@ async def set_current_model(
     return CurrentModelResponse(model=request.model)
 
 
-@router.post("/models/pull")
+class PullModelResponse(BaseModel):
+    """Response model for starting a pull."""
+
+    started: bool
+    message: str
+
+
+@router.post("/models/pull", response_model=PullModelResponse)
 async def pull_model(
     request: PullModelRequest,
     ollama: OllamaClient = Depends(get_ollama_client),
-) -> StreamingResponse:
+) -> PullModelResponse:
     """Pull a new model from Ollama registry."""
-    async def generate_progress():
-        try:
-            async for progress in ollama.pull_model(request.model):
-                yield f"data: {json.dumps(progress)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    if is_pull_running():
+        pull = get_active_pull()
+        return PullModelResponse(
+            started=False,
+            message=f"Already pulling {pull.model if pull else 'a model'}"
+        )
 
-    return StreamingResponse(
-        generate_progress(),
-        media_type="text/event-stream",
-    )
+    # Start background task
+    await start_pull_task(ollama, request.model)
+    return PullModelResponse(started=True, message=f"Started pulling {request.model}")
 
 
 class PullStatusResponse(BaseModel):

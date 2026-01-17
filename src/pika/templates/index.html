@@ -88,6 +88,16 @@
                     addMessage(msg.content, 'error');
                 }
             }
+
+            // Check if there was a pending query that got interrupted
+            const pendingQuestion = sessionStorage.getItem('pika_pending_question');
+            if (pendingQuestion) {
+                sessionStorage.removeItem('pika_pending_question');
+                // Question is already in history, just add the interrupted message
+                addMessage('Query was interrupted. Please ask again.', 'error');
+                chatHistory.push({ type: 'error', content: 'Query was interrupted. Please ask again.' });
+                saveChatHistory();
+            }
         } catch (e) {
             console.error('Failed to restore chat history:', e);
             chatHistory = [];
@@ -115,6 +125,9 @@
         chatHistory.push({ type: 'user', content: question });
         saveChatHistory();
 
+        // Track pending question (in case user navigates away)
+        sessionStorage.setItem('pika_pending_question', question);
+
         // Add loading message
         const loadingId = addMessage('Thinking', 'assistant', true);
 
@@ -131,12 +144,18 @@
                 throw new Error(result.detail || 'Query failed');
             }
 
+            // Clear pending question - query completed
+            sessionStorage.removeItem('pika_pending_question');
+
             removeMessage(loadingId);
             addAnswerMessage(result);
             chatHistory.push({ type: 'assistant', result: result });
             saveChatHistory();
 
         } catch (error) {
+            // Clear pending question - query failed
+            sessionStorage.removeItem('pika_pending_question');
+
             removeMessage(loadingId);
             addMessage('Error: ' + error.message, 'error');
             chatHistory.push({ type: 'error', content: 'Error: ' + error.message });

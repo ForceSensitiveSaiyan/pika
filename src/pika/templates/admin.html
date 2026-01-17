@@ -256,10 +256,16 @@
     function startPullPolling() {
         if (pullPollingInterval) return; // Already polling
 
+        let lastModel = null;
+
         pullPollingInterval = setInterval(async () => {
             try {
                 const response = await fetch('/api/v1/models/pull/status');
                 const status = await response.json();
+
+                if (status.active) {
+                    lastModel = status.model;
+                }
 
                 if (!status.active) {
                     // Pull completed or failed
@@ -269,6 +275,10 @@
 
                     btn.disabled = false;
                     await loadModels();
+
+                    if (lastModel) {
+                        showToast(`Model ${lastModel} pulled successfully`, 'success');
+                    }
 
                     setTimeout(() => {
                         progress.classList.remove('visible');
@@ -304,62 +314,31 @@
         progressFill.style.width = '0%';
         progressText.textContent = 'Starting download...';
 
-        // Start the pull request (don't await the full stream)
-        fetch('/api/v1/models/pull', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: modelName })
-        }).then(async (response) => {
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
+        try {
+            const response = await fetch('/api/v1/models/pull', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: modelName })
+            });
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
+            const result = await response.json();
 
-                const text = decoder.decode(value);
-                const lines = text.split('\n').filter(l => l.startsWith('data: '));
-
-                for (const line of lines) {
-                    try {
-                        const data = JSON.parse(line.slice(6));
-
-                        if (data.error) {
-                            showToast(`Failed to pull model: ${data.error}`, 'error');
-                            return;
-                        }
-
-                        if (data.total && data.completed) {
-                            const percent = Math.round((data.completed / data.total) * 100);
-                            progressFill.style.width = percent + '%';
-                            progressText.textContent = `Downloading: ${percent}%`;
-                        } else if (data.status) {
-                            progressText.textContent = data.status;
-                            if (data.status === 'success') {
-                                progressFill.style.width = '100%';
-                            }
-                        }
-                    } catch (e) {
-                        // Ignore parse errors
-                    }
-                }
+            if (!result.started) {
+                showToast(result.message, 'error');
+                btn.disabled = false;
+                progress.classList.remove('visible');
+                return;
             }
 
             input.value = '';
-            await loadModels();
-            showToast(`Model ${modelName} pulled successfully`, 'success');
-        }).catch(error => {
-            showToast(`Failed to pull model: ${error.message}`, 'error');
-        }).finally(() => {
-            btn.disabled = false;
-            stopPullPolling();
-            setTimeout(() => {
-                progress.classList.remove('visible');
-            }, 2000);
-        });
+            // Start polling for progress
+            startPullPolling();
 
-        // Also start polling as a backup (in case user navigates away and back)
-        startPullPolling();
+        } catch (error) {
+            showToast(`Failed to pull model: ${error.message}`, 'error');
+            btn.disabled = false;
+            progress.classList.remove('visible');
+        }
     }
 
     // ==================== Documents ====================

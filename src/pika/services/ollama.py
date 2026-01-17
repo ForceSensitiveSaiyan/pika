@@ -53,6 +53,9 @@ class PullStatus:
 
 # Global pull status tracker
 _active_pull: PullStatus | None = None
+_pull_task: "asyncio.Task | None" = None
+
+import asyncio
 
 
 def get_active_pull() -> PullStatus | None:
@@ -64,6 +67,28 @@ def _set_active_pull(status: PullStatus | None) -> None:
     """Set the active pull status."""
     global _active_pull
     _active_pull = status
+
+
+def is_pull_running() -> bool:
+    """Check if a pull task is currently running."""
+    return _pull_task is not None and not _pull_task.done()
+
+
+async def start_pull_task(client: "OllamaClient", model_name: str) -> None:
+    """Start a background pull task if not already running."""
+    global _pull_task
+
+    if is_pull_running():
+        return  # Already pulling
+
+    async def run_pull():
+        try:
+            async for _ in client.pull_model(model_name):
+                pass  # Status is updated inside pull_model
+        except Exception as e:
+            logger.error(f"Background pull failed: {e}")
+
+    _pull_task = asyncio.create_task(run_pull())
 
 
 def _make_timeout(seconds: int) -> httpx.Timeout:
