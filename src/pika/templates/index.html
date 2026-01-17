@@ -54,6 +54,7 @@
 {% block scripts %}
 <script>
     let isLoading = false;
+    let messageCounter = 0;
 
     async function sendQuestion(event) {
         event.preventDefault();
@@ -104,7 +105,7 @@
 
     function addMessage(content, type, isLoading = false) {
         const container = document.getElementById('chat-messages');
-        const id = 'msg-' + Date.now();
+        const id = 'msg-' + (messageCounter++);
 
         const div = document.createElement('div');
         div.id = id;
