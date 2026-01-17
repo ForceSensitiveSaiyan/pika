@@ -403,6 +403,10 @@ async def start_query_task(question: str, query_id: str, top_k: int | None = Non
     """Start a background query task."""
     global _query_task
 
+    # Import here to avoid circular import
+    from pika.services.audit import get_audit_logger
+    from pika.services.app_config import get_app_config
+
     # Create query status
     query_status = QueryStatus(query_id=query_id, question=question, status="running")
     _set_query_status(query_status)
@@ -414,10 +418,29 @@ async def start_query_task(question: str, query_id: str, top_k: int | None = Non
             query_status.result = result
             query_status.status = "completed"
             logger.info(f"Query completed: {query_id}")
+
+            # Audit log
+            audit = get_audit_logger()
+            audit.log_query(
+                question=question,
+                model=get_app_config().get_current_model(),
+                confidence=result.confidence.value,
+                sources=[s.filename for s in result.sources],
+            )
         except Exception as e:
             query_status.error = str(e)
             query_status.status = "error"
             logger.error(f"Query failed: {query_id} - {e}")
+
+            # Audit log error
+            audit = get_audit_logger()
+            audit.log_query(
+                question=question,
+                model=get_app_config().get_current_model(),
+                confidence="none",
+                sources=[],
+                error=str(e),
+            )
 
     _query_task = asyncio.create_task(run_query())
     return query_status

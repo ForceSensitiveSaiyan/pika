@@ -2,11 +2,13 @@
 
 import json
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from pika.config import get_settings
 from pika.services.app_config import get_app_config, AppConfigService
+from pika.services.audit import get_audit_logger
 from pika.services.ollama import OllamaClient, get_ollama_client, _format_size, get_active_pull, is_pull_running, start_pull_task
 from pika.services.rag import (
     RAGEngine, get_rag_engine, Confidence, IndexedDocument,
@@ -16,6 +18,18 @@ from pika.services.rag import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def verify_api_key(x_api_key: str | None = Header(None)) -> bool:
+    """Verify API key if required."""
+    settings = get_settings()
+    if settings.pika_api_key is None:
+        return True  # No API key required
+    if x_api_key is None:
+        raise HTTPException(status_code=401, detail="API key required")
+    if x_api_key != settings.pika_api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return True
 
 
 class GenerateRequest(BaseModel):
@@ -123,9 +137,19 @@ async def get_current_model(
 async def set_current_model(
     request: SetModelRequest,
     config: AppConfigService = Depends(get_app_config),
+    _: bool = Depends(verify_api_key),
 ) -> CurrentModelResponse:
     """Set the current model."""
+    old_model = config.get_current_model()
     config.set_current_model(request.model)
+
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_admin_action("change_model", {
+        "old_model": old_model,
+        "new_model": request.model,
+    })
+
     return CurrentModelResponse(model=request.model)
 
 
@@ -140,6 +164,7 @@ class PullModelResponse(BaseModel):
 async def pull_model(
     request: PullModelRequest,
     ollama: OllamaClient = Depends(get_ollama_client),
+    _: bool = Depends(verify_api_key),
 ) -> PullModelResponse:
     """Pull a new model from Ollama registry."""
     if is_pull_running():
@@ -148,6 +173,10 @@ async def pull_model(
             started=False,
             message=f"Already pulling {pull.model if pull else 'a model'}"
         )
+
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_admin_action("pull_model", {"model": request.model})
 
     # Start background task
     await start_pull_task(ollama, request.model)
@@ -266,10 +295,19 @@ class QueryResponse(BaseModel):
 @router.post("/index", response_model=IndexResponse)
 async def index_documents(
     rag: RAGEngine = Depends(get_rag_engine),
+    _: bool = Depends(verify_api_key),
 ) -> IndexResponse:
     """Reindex all documents from the documents directory."""
     try:
         stats = rag.index_documents()
+
+        # Audit log
+        audit = get_audit_logger()
+        audit.log_admin_action("index_documents", {
+            "total_documents": stats.total_documents,
+            "total_chunks": stats.total_chunks,
+        })
+
         return IndexResponse(
             status="indexed",
             total_documents=stats.total_documents,
@@ -336,6 +374,7 @@ class QueryStatusResponse(BaseModel):
 @router.post("/query", response_model=QueryStartResponse)
 async def query_documents(
     request: QueryRequest,
+    _: bool = Depends(verify_api_key),
 ) -> QueryStartResponse:
     """Start a background query to the RAG system."""
     query_id = str(uuid.uuid4())[:8]

@@ -1,12 +1,14 @@
 """Web interface routes for PIKA."""
 
+import secrets
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from pika.config import Settings, get_settings
+from pika.services.audit import get_audit_logger
 from pika.services.documents import DocumentInfo, DocumentProcessor, get_document_processor
 
 router = APIRouter()
@@ -14,6 +16,38 @@ router = APIRouter()
 # Templates directory
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# Session storage (simple in-memory for basic security)
+_sessions: dict[str, bool] = {}
+
+
+def is_admin_auth_required() -> bool:
+    """Check if admin authentication is required."""
+    settings = get_settings()
+    return settings.pika_admin_password is not None
+
+
+def is_authenticated(request: Request) -> bool:
+    """Check if the request is authenticated for admin access."""
+    if not is_admin_auth_required():
+        return True
+    session_id = request.cookies.get("pika_session")
+    return session_id is not None and _sessions.get(session_id, False)
+
+
+def require_admin_auth(request: Request) -> bool:
+    """Dependency to require admin authentication."""
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return True
+
+
+def get_client_ip(request: Request) -> str:
+    """Get client IP address from request."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -25,7 +59,72 @@ async def index(request: Request):
 @router.get("/admin", response_class=HTMLResponse)
 async def admin(request: Request):
     """Serve the admin interface."""
-    return templates.TemplateResponse("admin.html", {"request": request})
+    if is_admin_auth_required() and not is_authenticated(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+    return templates.TemplateResponse("admin.html", {
+        "request": request,
+        "auth_enabled": is_admin_auth_required(),
+    })
+
+
+@router.get("/admin/login", response_class=HTMLResponse)
+async def admin_login_page(request: Request):
+    """Serve the admin login page."""
+    if not is_admin_auth_required():
+        return RedirectResponse(url="/admin", status_code=302)
+    if is_authenticated(request):
+        return RedirectResponse(url="/admin", status_code=302)
+    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+
+
+@router.post("/admin/login")
+async def admin_login(request: Request, password: str = Form(...)):
+    """Handle admin login."""
+    settings = get_settings()
+    audit = get_audit_logger()
+    client_ip = get_client_ip(request)
+
+    if not is_admin_auth_required():
+        return RedirectResponse(url="/admin", status_code=302)
+
+    if secrets.compare_digest(password, settings.pika_admin_password):
+        # Create session
+        session_id = secrets.token_urlsafe(32)
+        _sessions[session_id] = True
+
+        audit.log_auth("login", success=True, ip_address=client_ip)
+
+        response = RedirectResponse(url="/admin", status_code=302)
+        response.set_cookie(
+            key="pika_session",
+            value=session_id,
+            httponly=True,
+            samesite="lax",
+            max_age=86400,  # 24 hours
+        )
+        return response
+    else:
+        audit.log_auth("login", success=False, ip_address=client_ip)
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Invalid password"},
+            status_code=401,
+        )
+
+
+@router.get("/admin/logout")
+async def admin_logout(request: Request):
+    """Handle admin logout."""
+    session_id = request.cookies.get("pika_session")
+    if session_id and session_id in _sessions:
+        del _sessions[session_id]
+
+    audit = get_audit_logger()
+    audit.log_auth("logout", success=True, ip_address=get_client_ip(request))
+
+    response = RedirectResponse(url="/", status_code=302)
+    response.delete_cookie("pika_session")
+    return response
 
 
 @router.get("/documents")
@@ -108,4 +207,23 @@ async def delete_document(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete file: {e}")
 
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_admin_action("delete_document", {"filename": filename})
+
     return {"filename": filename, "status": "deleted"}
+
+
+@router.get("/admin/logs", response_class=HTMLResponse)
+async def admin_logs_page(request: Request):
+    """Serve the audit logs page."""
+    if is_admin_auth_required() and not is_authenticated(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    audit = get_audit_logger()
+    logs = audit.get_recent_logs(100)
+
+    return templates.TemplateResponse(
+        "logs.html",
+        {"request": request, "logs": logs},
+    )

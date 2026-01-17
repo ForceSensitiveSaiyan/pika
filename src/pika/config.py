@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     confidence_medium: float = 0.5
     confidence_low: float = 0.3
 
+    # Authentication settings
+    pika_admin_password: str | None = None  # Password for admin page
+    pika_api_key: str | None = None  # API key for API endpoints
+    pika_session_secret: str = "change-me-in-production"  # Secret for session cookies
+
+    # Audit settings
+    audit_log_path: str = "./data/audit.log"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

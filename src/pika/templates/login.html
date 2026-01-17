@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}PIKA - Login{% endblock %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card">
+        <div class="login-header">
+            <a href="/" class="logo">PIKA</a>
+            <p class="login-subtitle">Admin Login</p>
+        </div>
+
+        {% if error %}
+        <div class="login-error">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form class="login-form" method="POST" action="/admin/login">
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    class="form-input"
+                    placeholder="Enter admin password"
+                    required
+                    autofocus
+                >
+            </div>
+            <button type="submit" class="btn btn-primary login-btn">
+                Login
+            </button>
+        </form>
+
+        <a href="/" class="login-back">Back to Chat</a>
+    </div>
+</div>
+{% endblock %}
