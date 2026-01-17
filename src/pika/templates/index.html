@@ -3,44 +3,58 @@
 {% block title %}PIKA - Chat{% endblock %}
 
 {% block content %}
-<a href="/admin" class="admin-link">
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"></circle>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-    </svg>
-    Admin
-</a>
+<!-- Header -->
+<header class="header">
+    <div class="header-left">
+        <a href="/" class="logo">PIKA</a>
+    </div>
+    <a href="/admin" class="header-link">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        Admin
+    </a>
+</header>
 
-<main class="chat-container">
+<!-- Chat Layout -->
+<div class="chat-layout">
     <div class="chat-messages" id="chat-messages">
-        <div class="welcome-message">
-            <h2>Welcome to PIKA</h2>
-            <p>Ask questions about your indexed documents.</p>
-            <p class="welcome-hint">Upload and index documents in the <a href="/admin">Admin</a> section.</p>
+        <div class="welcome" id="welcome">
+            <svg class="welcome-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <h1 class="welcome-title">Ask anything about your documents</h1>
+            <p class="welcome-text">
+                Upload and index documents in the <a href="/admin">Admin</a> section, then ask questions here.
+            </p>
         </div>
     </div>
 
-    <form class="chat-input-form" id="chat-form" onsubmit="sendQuestion(event)">
-        <input
-            type="text"
-            class="chat-input"
-            id="question-input"
-            placeholder="Ask a question about your documents..."
-            autocomplete="off"
-        >
-        <button type="submit" class="btn btn-send" id="send-btn">
-            Send
-        </button>
-    </form>
-</main>
+    <div class="chat-input-container">
+        <form class="chat-input-wrapper" id="chat-form" onsubmit="sendQuestion(event)">
+            <input
+                type="text"
+                class="chat-input"
+                id="question-input"
+                placeholder="Ask a question..."
+                autocomplete="off"
+            >
+            <button type="submit" class="btn btn-primary chat-send-btn" id="send-btn">
+                Send
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toast-container"></div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-    // State
     let isLoading = false;
 
-    // Send question
     async function sendQuestion(event) {
         event.preventDefault();
 
@@ -53,11 +67,15 @@
         isLoading = true;
         updateSendButton();
 
+        // Remove welcome
+        const welcome = document.getElementById('welcome');
+        if (welcome) welcome.remove();
+
         // Add user message
         addMessage(question, 'user');
 
-        // Add loading indicator
-        const loadingId = addMessage('Thinking...', 'assistant', true);
+        // Add loading message
+        const loadingId = addMessage('Thinking', 'assistant', true);
 
         try {
             const response = await fetch('/api/v1/query', {
@@ -72,7 +90,6 @@
                 throw new Error(result.detail || 'Query failed');
             }
 
-            // Remove loading and add response
             removeMessage(loadingId);
             addAnswerMessage(result);
 
@@ -85,17 +102,20 @@
         }
     }
 
-    // Add a chat message
     function addMessage(content, type, isLoading = false) {
         const container = document.getElementById('chat-messages');
-        const welcome = container.querySelector('.welcome-message');
-        if (welcome) welcome.remove();
-
         const id = 'msg-' + Date.now();
+
         const div = document.createElement('div');
         div.id = id;
-        div.className = `message message-${type}${isLoading ? ' loading' : ''}`;
-        div.innerHTML = `<div class="message-content">${escapeHtml(content)}</div>`;
+        div.className = `message message-${type}${isLoading ? ' message-loading' : ''}`;
+
+        const loadingClass = isLoading ? ' loading-dots' : '';
+        div.innerHTML = `
+            <div class="message-bubble">
+                <div class="message-content${loadingClass}">${escapeHtml(content)}</div>
+            </div>
+        `;
 
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
@@ -103,7 +123,6 @@
         return id;
     }
 
-    // Add answer with sources
     function addAnswerMessage(result) {
         const container = document.getElementById('chat-messages');
 
@@ -114,18 +133,27 @@
         if (result.sources && result.sources.length > 0) {
             const uniqueSources = [...new Set(result.sources.map(s => s.filename))];
             sourcesHtml = `
-                <div class="sources">
-                    <span class="sources-label">Sources:</span>
-                    ${uniqueSources.map(f => `<span class="source-tag">${escapeHtml(f)}</span>`).join('')}
+                <div class="message-sources">
+                    <span class="source-label">Sources</span>
+                    ${uniqueSources.map(f => `<span class="source-pill">${escapeHtml(f)}</span>`).join('')}
                 </div>
             `;
         }
 
+        const confidenceHtml = `
+            <div class="message-footer">
+                <span class="confidence confidence-${result.confidence}">
+                    <span class="confidence-dot"></span>
+                    ${result.confidence}
+                </span>
+            </div>
+        `;
+
         div.innerHTML = `
-            <div class="message-content">
-                <div class="answer-text">${escapeHtml(result.answer)}</div>
+            <div class="message-bubble">
+                <div class="message-content">${escapeHtml(result.answer)}</div>
                 ${sourcesHtml}
-                <span class="confidence-badge confidence-${result.confidence}">${result.confidence}</span>
+                ${confidenceHtml}
             </div>
         `;
 
@@ -133,24 +161,42 @@
         container.scrollTop = container.scrollHeight;
     }
 
-    // Remove message by ID
     function removeMessage(id) {
         const el = document.getElementById(id);
         if (el) el.remove();
     }
 
-    // Update send button state
     function updateSendButton() {
         const btn = document.getElementById('send-btn');
         btn.disabled = isLoading;
-        btn.textContent = isLoading ? '...' : 'Send';
+        btn.innerHTML = isLoading ? '<span class="spinner"></span>' : 'Send';
     }
 
-    // Escape HTML
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
     }
+
+    function showToast(message, type = 'info') {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            toast.classList.add('hiding');
+            setTimeout(() => toast.remove(), 300);
+        }, 3000);
+    }
+
+    // Allow Enter to submit (Shift+Enter for new line would need textarea)
+    document.getElementById('question-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+        }
+    });
 </script>
 {% endblock %}
