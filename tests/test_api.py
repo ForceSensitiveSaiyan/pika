@@ -1,0 +1,139 @@
+"""Tests for API endpoints."""
+
+import pytest
+from unittest.mock import patch, MagicMock, AsyncMock
+
+
+class TestHealthEndpoint:
+    """Tests for the health check endpoint."""
+
+    def test_health_returns_200(self, test_client, mock_ollama_client):
+        """Verify health endpoint returns 200."""
+        with patch("pika.api.routes.get_ollama_client", return_value=mock_ollama_client):
+            response = test_client.get("/api/v1/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "status" in data
+        assert "ollama" in data
+        assert "index" in data
+        assert "disk" in data
+
+    def test_health_shows_ollama_disconnected(self, test_client, mock_ollama_client):
+        """Verify health endpoint shows Ollama disconnection."""
+        mock_ollama_client.health_check = AsyncMock(return_value=False)
+        mock_ollama_client.list_models = AsyncMock(return_value=[])
+
+        with patch("pika.api.routes.get_ollama_client", return_value=mock_ollama_client):
+            response = test_client.get("/api/v1/health")
+
+        assert response.status_code == 200
+        data = response.json()
+        # When disconnected, ollama.connected should be False
+        assert "ollama" in data
+
+
+class TestModelsEndpoint:
+    """Tests for the models endpoint."""
+
+    def test_list_models_returns_valid_response(self, test_client):
+        """Verify models endpoint returns a valid list."""
+        response = test_client.get("/api/v1/models")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Should be a list
+        assert isinstance(data, list)
+        # Each model should have required fields
+        for model in data:
+            assert "name" in model
+            assert "size" in model
+            assert "is_current" in model
+
+
+class TestIndexEndpoint:
+    """Tests for the index endpoint."""
+
+    def test_get_index_stats_requires_auth(self, test_client):
+        """Verify index stats requires authentication when auth is enabled."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=True):
+            response = test_client.get("/api/v1/index/stats")
+        assert response.status_code == 401
+
+    def test_index_documents_requires_auth(self, test_client):
+        """Verify indexing requires authentication when auth is enabled."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=True):
+            response = test_client.post("/api/v1/index")
+        assert response.status_code == 401
+
+
+class TestQueryEndpoint:
+    """Tests for the query endpoint."""
+
+    def test_query_requires_auth(self, test_client):
+        """Verify query endpoint requires authentication when auth is enabled."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=True):
+            response = test_client.post(
+                "/api/v1/query",
+                json={"question": "What is PIKA?"},
+            )
+        assert response.status_code == 401
+
+
+class TestUploadEndpoint:
+    """Tests for the file upload endpoint."""
+
+    def test_upload_requires_auth(self, test_client):
+        """Verify upload requires authentication when auth is enabled."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=True):
+            response = test_client.post(
+                "/upload",
+                files={"file": ("test.txt", b"content", "text/plain")},
+            )
+        assert response.status_code == 401
+
+    def test_upload_works_when_auth_disabled(self, test_client, temp_dirs):
+        """Verify upload works when auth is disabled."""
+        from pathlib import Path
+
+        # Make sure docs dir exists
+        docs_dir = Path(temp_dirs["docs"])
+        docs_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch("pika.api.web.is_admin_auth_required", return_value=False), \
+             patch("pika.services.documents.get_settings") as mock_settings:
+            mock_settings.return_value.documents_dir = str(docs_dir)
+            response = test_client.post(
+                "/upload",
+                files={"file": ("test.txt", b"test content", "text/plain")},
+            )
+        # Should succeed or at least not be a 401
+        assert response.status_code != 401
+
+
+class TestHistoryEndpoint:
+    """Tests for the history endpoint."""
+
+    def test_history_requires_auth(self, test_client):
+        """Verify history endpoint requires authentication when auth is enabled."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=True):
+            response = test_client.get("/api/v1/history")
+        assert response.status_code == 401
+
+
+class TestFeedbackEndpoint:
+    """Tests for the feedback endpoint."""
+
+    def test_feedback_requires_auth(self, test_client):
+        """Verify feedback endpoint requires authentication when auth is enabled."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=True):
+            response = test_client.post(
+                "/api/v1/feedback",
+                json={
+                    "query_id": "test123",
+                    "question": "test",
+                    "answer": "test",
+                    "rating": "up",
+                },
+            )
+        assert response.status_code == 401

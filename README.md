@@ -34,6 +34,44 @@ docker compose exec ollama ollama pull mistral:7b
 # Open http://localhost:8000 in your browser
 ```
 
+## Development
+
+### Running Tests
+
+PIKA includes a comprehensive test suite. To run tests:
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests with coverage
+pytest tests/ --cov=src/pika --cov-report=term-missing -v
+
+# Or use the test script
+./scripts/test.sh      # Linux/Mac
+scripts\test.bat       # Windows
+```
+
+The test suite includes:
+- **API tests** (`test_api.py`) - HTTP endpoint testing
+- **Document tests** (`test_documents.py`) - Document processing and chunking
+- **RAG tests** (`test_rag.py`) - Vector storage and retrieval
+- **Auth tests** (`test_auth.py`) - Authentication and sessions
+- **Security tests** (`test_security.py`) - Password hashing, CSRF, rate limiting
+
+Tests run without requiring Ollama (mocked) and complete in under 30 seconds.
+
+### Test Coverage
+
+View the coverage report after running tests:
+
+```bash
+# HTML report
+open coverage_html/index.html    # Mac
+xdg-open coverage_html/index.html  # Linux
+start coverage_html\index.html   # Windows
+```
+
 ## Screenshots
 
 <!-- Screenshots will be added here -->

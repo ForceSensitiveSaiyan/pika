@@ -2,34 +2,44 @@
 
 import json
 import logging
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
+from pika.api.web import require_admin_auth, require_admin_or_api_auth
 from pika.config import get_settings
-from pika.services.app_config import get_app_config, AppConfigService
+from pika.services.app_config import AppConfigService, get_app_config
 from pika.services.audit import get_audit_logger
-from pika.services.ollama import OllamaClient, get_ollama_client, _format_size, get_active_pull, is_pull_running, start_pull_task
+from pika.services.history import HistoryService, get_history_service
+from pika.services.ollama import (
+    OllamaClient,
+    _format_size,
+    get_active_pull,
+    get_ollama_client,
+    is_pull_running,
+    start_pull_task,
+)
 from pika.services.rag import (
-    RAGEngine, get_rag_engine, Confidence, IndexedDocument,
-    get_active_query, clear_query_status, start_query_task, is_query_running
+    Confidence,
+    RAGEngine,
+    cancel_query,
+    clear_query_status,
+    get_active_query,
+    get_rag_engine,
+    is_query_running,
+    start_query_task,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
-def verify_api_key(x_api_key: str | None = Header(None)) -> bool:
-    """Verify API key if required."""
-    settings = get_settings()
-    if settings.pika_api_key is None:
-        return True  # No API key required
-    if x_api_key is None:
-        raise HTTPException(status_code=401, detail="API key required")
-    if x_api_key != settings.pika_api_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    return True
+# Rate limiter for API endpoints
+limiter = Limiter(key_func=get_remote_address)
 
 
 class GenerateRequest(BaseModel):
@@ -48,22 +58,118 @@ class GenerateResponse(BaseModel):
     model: str
 
 
+class OllamaHealthResponse(BaseModel):
+    """Health status for Ollama."""
+
+    connected: bool
+    current_model: str | None = None
+    model_loaded: bool = False
+    error: str | None = None
+
+
+class IndexHealthResponse(BaseModel):
+    """Health status for the index."""
+
+    document_count: int
+    chunk_count: int
+
+
+class DiskHealthResponse(BaseModel):
+    """Health status for disk space."""
+
+    data_dir: str
+    free_bytes: int
+    free_gb: float
+    warning: bool = False  # True if < 1GB free
+
+
 class HealthResponse(BaseModel):
     """Response model for health check."""
 
-    status: str
-    ollama_connected: bool
+    status: str  # healthy, degraded, unhealthy
+    ollama: OllamaHealthResponse
+    index: IndexHealthResponse
+    disk: DiskHealthResponse
 
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check(
     ollama: OllamaClient = Depends(get_ollama_client),
+    rag: RAGEngine = Depends(get_rag_engine),
+    config: AppConfigService = Depends(get_app_config),
 ) -> HealthResponse:
     """Check the health of PIKA and its dependencies."""
-    ollama_ok = await ollama.health_check()
+    import shutil
+    from pathlib import Path
+
+    settings = get_settings()
+
+    # Check Ollama
+    ollama_health = OllamaHealthResponse(connected=False)
+    try:
+        ollama_ok = await ollama.health_check()
+        current_model = config.get_current_model()
+        model_loaded = False
+
+        if ollama_ok:
+            # Check if current model is available
+            models = await ollama.list_models()
+            model_names = [m.name for m in models]
+            model_loaded = current_model in model_names
+
+        ollama_health = OllamaHealthResponse(
+            connected=ollama_ok,
+            current_model=current_model,
+            model_loaded=model_loaded,
+        )
+    except Exception as e:
+        ollama_health = OllamaHealthResponse(
+            connected=False,
+            error=str(e),
+        )
+
+    # Check index
+    try:
+        stats = rag.get_stats()
+        index_health = IndexHealthResponse(
+            document_count=stats.total_documents,
+            chunk_count=stats.total_chunks,
+        )
+    except Exception:
+        index_health = IndexHealthResponse(document_count=0, chunk_count=0)
+
+    # Check disk space
+    data_dir = Path(settings.chroma_persist_dir).parent
+    try:
+        disk_usage = shutil.disk_usage(data_dir)
+        free_gb = disk_usage.free / (1024**3)
+        disk_health = DiskHealthResponse(
+            data_dir=str(data_dir),
+            free_bytes=disk_usage.free,
+            free_gb=round(free_gb, 2),
+            warning=free_gb < 1.0,
+        )
+    except Exception:
+        disk_health = DiskHealthResponse(
+            data_dir=str(data_dir),
+            free_bytes=0,
+            free_gb=0,
+            warning=True,
+        )
+
+    # Determine overall status
+    if not ollama_health.connected:
+        status = "unhealthy"
+    elif not ollama_health.model_loaded or disk_health.warning:
+        status = "degraded"
+    else:
+        status = "healthy"
+
     return HealthResponse(
-        status="healthy" if ollama_ok else "degraded",
-        ollama_connected=ollama_ok,
+        status=status,
+        ollama=ollama_health,
+        index=index_health,
+        disk=disk_health,
     )
 
 
@@ -137,7 +243,7 @@ async def get_current_model(
 async def set_current_model(
     request: SetModelRequest,
     config: AppConfigService = Depends(get_app_config),
-    _: bool = Depends(verify_api_key),
+    _: bool = Depends(require_admin_or_api_auth),
 ) -> CurrentModelResponse:
     """Set the current model."""
     old_model = config.get_current_model()
@@ -145,10 +251,13 @@ async def set_current_model(
 
     # Audit log
     audit = get_audit_logger()
-    audit.log_admin_action("change_model", {
-        "old_model": old_model,
-        "new_model": request.model,
-    })
+    audit.log_admin_action(
+        "change_model",
+        {
+            "old_model": old_model,
+            "new_model": request.model,
+        },
+    )
 
     return CurrentModelResponse(model=request.model)
 
@@ -164,14 +273,14 @@ class PullModelResponse(BaseModel):
 async def pull_model(
     request: PullModelRequest,
     ollama: OllamaClient = Depends(get_ollama_client),
-    _: bool = Depends(verify_api_key),
+    _: bool = Depends(require_admin_or_api_auth),
 ) -> PullModelResponse:
     """Pull a new model from Ollama registry."""
     if is_pull_running():
         pull = get_active_pull()
         return PullModelResponse(
             started=False,
-            message=f"Already pulling {pull.model if pull else 'a model'}"
+            message=f"Already pulling {pull.model if pull else 'a model'}",
         )
 
     # Audit log
@@ -295,7 +404,7 @@ class QueryResponse(BaseModel):
 @router.post("/index", response_model=IndexResponse)
 async def index_documents(
     rag: RAGEngine = Depends(get_rag_engine),
-    _: bool = Depends(verify_api_key),
+    _: bool = Depends(require_admin_or_api_auth),
 ) -> IndexResponse:
     """Reindex all documents from the documents directory."""
     try:
@@ -303,10 +412,13 @@ async def index_documents(
 
         # Audit log
         audit = get_audit_logger()
-        audit.log_admin_action("index_documents", {
-            "total_documents": stats.total_documents,
-            "total_chunks": stats.total_chunks,
-        })
+        audit.log_admin_action(
+            "index_documents",
+            {
+                "total_documents": stats.total_documents,
+                "total_chunks": stats.total_chunks,
+            },
+        )
 
         return IndexResponse(
             status="indexed",
@@ -320,6 +432,7 @@ async def index_documents(
 @router.get("/index/stats", response_model=IndexStatsResponse)
 async def get_index_stats(
     rag: RAGEngine = Depends(get_rag_engine),
+    _: bool = Depends(require_admin_auth),
 ) -> IndexStatsResponse:
     """Get statistics about the current index."""
     try:
@@ -336,6 +449,7 @@ async def get_index_stats(
 @router.get("/documents", response_model=list[IndexedDocumentResponse])
 async def get_indexed_documents(
     rag: RAGEngine = Depends(get_rag_engine),
+    _: bool = Depends(require_admin_or_api_auth),
 ) -> list[IndexedDocumentResponse]:
     """Get list of indexed documents with their chunk counts."""
     try:
@@ -349,9 +463,6 @@ async def get_indexed_documents(
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get documents: {e}")
-
-
-import uuid
 
 
 class QueryStartResponse(BaseModel):
@@ -372,27 +483,31 @@ class QueryStatusResponse(BaseModel):
 
 
 @router.post("/query", response_model=QueryStartResponse)
+@limiter.limit(lambda: get_settings().rate_limit_query)
 async def query_documents(
-    request: QueryRequest,
-    _: bool = Depends(verify_api_key),
+    request: Request,
+    query: QueryRequest,
+    _: bool = Depends(require_admin_or_api_auth),
 ) -> QueryStartResponse:
-    """Start a background query to the RAG system."""
+    """Start a background query to the RAG system with rate limiting."""
     query_id = str(uuid.uuid4())[:8]
 
     try:
         await start_query_task(
-            question=request.question,
+            question=query.question,
             query_id=query_id,
-            top_k=request.top_k,
+            top_k=query.top_k,
         )
         return QueryStartResponse(query_id=query_id, status="running")
     except Exception as e:
-        logger.exception(f"Failed to start query: {request.question[:50]}...")
+        logger.exception(f"Failed to start query: {query.question[:50]}...")
         raise HTTPException(status_code=500, detail=f"Failed to start query: {e}")
 
 
 @router.get("/query/status", response_model=QueryStatusResponse)
-async def get_query_status() -> QueryStatusResponse:
+async def get_query_status(
+    _: bool = Depends(require_admin_or_api_auth),
+) -> QueryStatusResponse:
     """Get the status of the current or most recent query."""
     query = get_active_query()
 
@@ -429,7 +544,112 @@ async def get_query_status() -> QueryStatusResponse:
 
 
 @router.delete("/query/status")
-async def clear_query() -> dict:
+async def clear_query(
+    _: bool = Depends(require_admin_or_api_auth),
+) -> dict:
     """Clear the current query status."""
     clear_query_status()
     return {"status": "cleared"}
+
+
+class CancelQueryResponse(BaseModel):
+    """Response model for cancel query."""
+
+    cancelled: bool
+    message: str
+
+
+@router.post("/query/cancel", response_model=CancelQueryResponse)
+async def cancel_running_query(
+    _: bool = Depends(require_admin_or_api_auth),
+) -> CancelQueryResponse:
+    """Cancel the currently running query."""
+    if not is_query_running():
+        return CancelQueryResponse(
+            cancelled=False,
+            message="No query is currently running",
+        )
+
+    cancelled = cancel_query()
+    if cancelled:
+        return CancelQueryResponse(
+            cancelled=True,
+            message="Query cancelled successfully",
+        )
+    return CancelQueryResponse(
+        cancelled=False,
+        message="Failed to cancel query",
+    )
+
+
+# --- History & Feedback Endpoints ---
+
+
+class HistoryEntry(BaseModel):
+    """Response model for a history entry."""
+
+    id: str
+    question: str
+    answer: str
+    confidence: str
+    sources: list[str]
+    timestamp: str
+
+
+class FeedbackRequest(BaseModel):
+    """Request model for submitting feedback."""
+
+    query_id: str
+    question: str
+    answer: str
+    rating: str  # "up" or "down"
+
+
+@router.get("/history", response_model=list[HistoryEntry])
+async def get_history(
+    limit: int = 20,
+    history: HistoryService = Depends(get_history_service),
+    _: bool = Depends(require_admin_or_api_auth),
+) -> list[HistoryEntry]:
+    """Get recent query history."""
+    entries = history.get_history(limit=limit)
+    return [
+        HistoryEntry(
+            id=e["id"],
+            question=e["question"],
+            answer=e["answer"],
+            confidence=e["confidence"],
+            sources=e["sources"],
+            timestamp=e["timestamp"],
+        )
+        for e in entries
+    ]
+
+
+@router.delete("/history")
+async def clear_history(
+    history: HistoryService = Depends(get_history_service),
+    _: bool = Depends(require_admin_or_api_auth),
+) -> dict:
+    """Clear query history."""
+    history.clear_history()
+    return {"status": "cleared"}
+
+
+@router.post("/feedback")
+async def submit_feedback(
+    request: FeedbackRequest,
+    history: HistoryService = Depends(get_history_service),
+    _: bool = Depends(require_admin_or_api_auth),
+) -> dict:
+    """Submit feedback for a query."""
+    if request.rating not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="Rating must be 'up' or 'down'")
+
+    history.add_feedback(
+        query_id=request.query_id,
+        question=request.question,
+        answer=request.answer,
+        rating=request.rating,
+    )
+    return {"status": "received", "rating": request.rating}

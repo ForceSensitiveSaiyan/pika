@@ -13,7 +13,13 @@ from sentence_transformers import SentenceTransformer
 
 from pika.config import Settings, get_settings
 from pika.services.documents import DocumentProcessor, get_document_processor
-from pika.services.ollama import OllamaClient, get_ollama_client
+from pika.services.ollama import (
+    OllamaClient,
+    OllamaConnectionError,
+    OllamaModelNotFoundError,
+    OllamaTimeoutError,
+    get_ollama_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -370,10 +376,38 @@ Question: {question}
 
 Answer based on the context above:"""
 
-            answer = await self.ollama_client.generate(
-                prompt=prompt,
-                system=system_prompt,
-            )
+            try:
+                answer = await self.ollama_client.generate(
+                    prompt=prompt,
+                    system=system_prompt,
+                )
+            except OllamaConnectionError:
+                return QueryResult(
+                    answer=(
+                        "Unable to connect to the AI model service (Ollama). "
+                        "Please check that Ollama is running and try again."
+                    ),
+                    sources=sources,
+                    confidence=Confidence.NONE,
+                )
+            except OllamaModelNotFoundError as e:
+                return QueryResult(
+                    answer=(
+                        f"The model '{e.model}' is not available. "
+                        "Please go to Admin to pull the model or select a different one."
+                    ),
+                    sources=sources,
+                    confidence=Confidence.NONE,
+                )
+            except OllamaTimeoutError:
+                return QueryResult(
+                    answer=(
+                        "The request took too long and timed out. "
+                        "Please try a shorter or simpler question, or try again later."
+                    ),
+                    sources=sources,
+                    confidence=Confidence.NONE,
+                )
 
         return QueryResult(
             answer=answer,
@@ -399,6 +433,27 @@ def is_query_running() -> bool:
     return _query_task is not None and not _query_task.done()
 
 
+def cancel_query() -> bool:
+    """Cancel the currently running query task.
+
+    Returns True if a query was cancelled, False if no query was running.
+    """
+    global _query_task, _active_query
+
+    if _query_task is not None and not _query_task.done():
+        _query_task.cancel()
+        if _active_query:
+            _active_query.status = "cancelled"
+            _active_query.error = "Query was cancelled by user"
+        logger.info("Query cancelled by user")
+        return True
+    return False
+
+
+# Query timeout in seconds (default 5 minutes)
+QUERY_TIMEOUT = 300
+
+
 async def start_query_task(question: str, query_id: str, top_k: int | None = None) -> QueryStatus:
     """Start a background query task."""
     global _query_task
@@ -406,6 +461,7 @@ async def start_query_task(question: str, query_id: str, top_k: int | None = Non
     # Import here to avoid circular import
     from pika.services.audit import get_audit_logger
     from pika.services.app_config import get_app_config
+    from pika.services.history import get_history_service
 
     # Create query status
     query_status = QueryStatus(query_id=query_id, question=question, status="running")
@@ -414,7 +470,11 @@ async def start_query_task(question: str, query_id: str, top_k: int | None = Non
     async def run_query():
         try:
             rag = get_rag_engine()
-            result = await rag.query(question=question, top_k=top_k)
+            # Add timeout to prevent queries from running forever
+            result = await asyncio.wait_for(
+                rag.query(question=question, top_k=top_k),
+                timeout=QUERY_TIMEOUT,
+            )
             query_status.result = result
             query_status.status = "completed"
             logger.info(f"Query completed: {query_id}")
@@ -426,6 +486,34 @@ async def start_query_task(question: str, query_id: str, top_k: int | None = Non
                 model=get_app_config().get_current_model(),
                 confidence=result.confidence.value,
                 sources=[s.filename for s in result.sources],
+            )
+
+            # Save to history
+            history = get_history_service()
+            history.add_query(
+                question=question,
+                answer=result.answer,
+                confidence=result.confidence.value,
+                sources=[s.filename for s in result.sources],
+            )
+        except asyncio.CancelledError:
+            # Query was cancelled by user
+            query_status.status = "cancelled"
+            query_status.error = "Query was cancelled"
+            logger.info(f"Query cancelled: {query_id}")
+        except asyncio.TimeoutError:
+            query_status.status = "error"
+            query_status.error = f"Query timed out after {QUERY_TIMEOUT} seconds"
+            logger.error(f"Query timed out: {query_id}")
+
+            # Audit log timeout
+            audit = get_audit_logger()
+            audit.log_query(
+                question=question,
+                model=get_app_config().get_current_model(),
+                confidence="none",
+                sources=[],
+                error="Query timed out",
             )
         except Exception as e:
             query_status.error = str(e)

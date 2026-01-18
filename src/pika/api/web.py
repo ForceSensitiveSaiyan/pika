@@ -1,17 +1,36 @@
 """Web interface routes for PIKA."""
 
 import hashlib
+import logging
 import secrets
+import time
 from pathlib import Path
+from threading import Lock
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+import bcrypt
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+
+# Cache-control headers to prevent browser from caching authenticated pages
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate, private",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 from pika.config import Settings, get_settings
 from pika.services.app_config import get_app_config
 from pika.services.audit import get_audit_logger
 from pika.services.documents import DocumentInfo, DocumentProcessor, get_document_processor
+
+# Rate limiter for auth endpoints
+limiter = Limiter(key_func=get_remote_address)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -19,13 +38,114 @@ router = APIRouter()
 TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-# Session storage (simple in-memory for basic security)
-_sessions: dict[str, bool] = {}
+# Thread-safe session storage with expiration
+_sessions: dict[str, dict] = {}
+_sessions_lock = Lock()
+SESSION_MAX_AGE = 86400  # 24 hours in seconds
+
+# CSRF token storage (maps token -> session_id for validation)
+_csrf_tokens: dict[str, tuple[str, float]] = {}  # token -> (session_id, created_at)
+_csrf_lock = Lock()
+CSRF_TOKEN_MAX_AGE = 3600  # 1 hour
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using SHA-256."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash a password using bcrypt."""
+    salt = bcrypt.gensalt(rounds=12)
+    return bcrypt.hashpw(password.encode(), salt).decode()
+
+
+def verify_hashed_password(password: str, hashed: str) -> bool:
+    """Verify a password against a hash. Supports both bcrypt and legacy SHA-256."""
+    # Check if it's a bcrypt hash (starts with $2b$, $2a$, or $2y$)
+    if hashed.startswith(("$2b$", "$2a$", "$2y$")):
+        try:
+            return bcrypt.checkpw(password.encode(), hashed.encode())
+        except Exception:
+            return False
+    else:
+        # Legacy SHA-256 hash (64 hex characters)
+        if len(hashed) == 64:
+            legacy_hash = hashlib.sha256(password.encode()).hexdigest()
+            return secrets.compare_digest(legacy_hash, hashed)
+        return False
+
+
+def _cleanup_expired_sessions() -> None:
+    """Remove expired sessions. Called periodically."""
+    current_time = time.time()
+    expired = [
+        sid for sid, data in _sessions.items()
+        if current_time - data.get("created_at", 0) > SESSION_MAX_AGE
+    ]
+    for sid in expired:
+        del _sessions[sid]
+
+
+def create_session(user_data: dict) -> str:
+    """Create a new session with thread safety."""
+    session_id = secrets.token_urlsafe(32)
+    with _sessions_lock:
+        _cleanup_expired_sessions()
+        _sessions[session_id] = {
+            **user_data,
+            "created_at": time.time(),
+        }
+    return session_id
+
+
+def get_session(session_id: str) -> dict | None:
+    """Get session data with thread safety."""
+    with _sessions_lock:
+        session = _sessions.get(session_id)
+        if session:
+            # Check if expired
+            if time.time() - session.get("created_at", 0) > SESSION_MAX_AGE:
+                del _sessions[session_id]
+                return None
+        return session
+
+
+def delete_session(session_id: str) -> None:
+    """Delete a session with thread safety."""
+    with _sessions_lock:
+        _sessions.pop(session_id, None)
+
+
+def generate_csrf_token(session_id: str | None = None) -> str:
+    """Generate a CSRF token tied to the current session."""
+    token = secrets.token_urlsafe(32)
+    with _csrf_lock:
+        # Cleanup expired tokens
+        current_time = time.time()
+        expired = [t for t, (_, created) in _csrf_tokens.items()
+                   if current_time - created > CSRF_TOKEN_MAX_AGE]
+        for t in expired:
+            del _csrf_tokens[t]
+        # Store new token
+        _csrf_tokens[token] = (session_id or "", current_time)
+    return token
+
+
+def validate_csrf_token(token: str | None, session_id: str | None = None) -> bool:
+    """Validate a CSRF token."""
+    if not token:
+        return False
+    with _csrf_lock:
+        data = _csrf_tokens.get(token)
+        if not data:
+            return False
+        stored_session, created_at = data
+        # Check if expired
+        if time.time() - created_at > CSRF_TOKEN_MAX_AGE:
+            del _csrf_tokens[token]
+            return False
+        # Invalidate token after use (one-time use)
+        del _csrf_tokens[token]
+        # If session tracking enabled, verify session matches
+        if session_id and stored_session and stored_session != session_id:
+            return False
+        return True
 
 
 def is_setup_required() -> bool:
@@ -49,31 +169,74 @@ def is_authenticated(request: Request) -> bool:
     if not is_admin_auth_required():
         return True
     session_id = request.cookies.get("pika_session")
-    return session_id is not None and _sessions.get(session_id, False)
+    return session_id is not None and get_session(session_id) is not None
 
 
-def verify_password(password: str) -> bool:
-    """Verify password against env var or stored credentials."""
+def verify_password(username: str, password: str) -> dict | None:
+    """Verify username/password against env var or stored credentials.
+
+    Supports auto-upgrade of legacy SHA-256 hashes to bcrypt on successful login.
+    """
     settings = get_settings()
     config = get_app_config()
 
-    # Check env var first
+    # Check env var first (plaintext comparison for env-based auth)
     if settings.pika_admin_password:
-        return secrets.compare_digest(password, settings.pika_admin_password)
+        if secrets.compare_digest(password, settings.pika_admin_password):
+            return {"username": username, "role": "admin"}
+        return None
 
-    # Check stored credentials
+    # Check stored admin credentials
     creds = config.get_admin_credentials()
-    if creds:
-        password_hash = hash_password(password)
-        return secrets.compare_digest(password_hash, creds["password_hash"])
+    if creds and secrets.compare_digest(username, creds.get("username", "")):
+        stored_hash = creds.get("password_hash", "")
+        if verify_hashed_password(password, stored_hash):
+            # Auto-upgrade legacy SHA-256 to bcrypt
+            if not stored_hash.startswith(("$2b$", "$2a$", "$2y$")):
+                new_hash = hash_password(password)
+                config.set_admin_credentials(username, new_hash)
+                logger.info(f"Upgraded password hash for admin user: {username}")
+            return {"username": username, "role": "admin"}
 
-    return False
+    # Check user list
+    for user in config.get_users():
+        if secrets.compare_digest(username, user.get("username", "")):
+            stored_hash = user.get("password_hash", "")
+            if verify_hashed_password(password, stored_hash):
+                # Auto-upgrade legacy SHA-256 to bcrypt
+                if not stored_hash.startswith(("$2b$", "$2a$", "$2y$")):
+                    new_hash = hash_password(password)
+                    config.update_user_password(username, new_hash)
+                    logger.info(f"Upgraded password hash for user: {username}")
+                return {"username": username, "role": user.get("role", "user")}
+
+    return None
 
 
 def require_admin_auth(request: Request) -> bool:
     """Dependency to require admin authentication."""
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Authentication required")
+    return True
+
+
+def require_admin_or_api_auth(
+    request: Request,
+    x_api_key: str | None = Header(None),
+) -> bool:
+    """Allow session auth or valid API key when required."""
+    if not is_admin_auth_required():
+        return True
+    if is_authenticated(request):
+        return True
+
+    settings = get_settings()
+    if settings.pika_api_key is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if x_api_key is None:
+        raise HTTPException(status_code=401, detail="API key required")
+    if not secrets.compare_digest(x_api_key, settings.pika_api_key):
+        raise HTTPException(status_code=401, detail="Invalid API key")
     return True
 
 
@@ -91,7 +254,13 @@ async def index(request: Request):
     # Redirect to setup if first launch
     if is_setup_required():
         return RedirectResponse(url="/setup", status_code=302)
-    return templates.TemplateResponse("index.html", {"request": request})
+    if is_admin_auth_required() and not is_authenticated(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+    response = templates.TemplateResponse("index.html", {"request": request})
+    # Prevent browser from caching authenticated pages
+    for header, value in NO_CACHE_HEADERS.items():
+        response.headers[header] = value
+    return response
 
 
 @router.get("/admin", response_class=HTMLResponse)
@@ -102,10 +271,25 @@ async def admin(request: Request):
         return RedirectResponse(url="/setup", status_code=302)
     if is_admin_auth_required() and not is_authenticated(request):
         return RedirectResponse(url="/admin/login", status_code=302)
-    return templates.TemplateResponse("admin.html", {
+    response = templates.TemplateResponse("admin.html", {
         "request": request,
         "auth_enabled": is_admin_auth_required(),
     })
+    # Prevent browser from caching authenticated pages (fixes back-button after logout)
+    for header, value in NO_CACHE_HEADERS.items():
+        response.headers[header] = value
+    return response
+
+
+@router.get("/auth/check")
+async def check_auth(request: Request):
+    """Check if user is authenticated. Used by frontend to detect stale sessions."""
+    if not is_admin_auth_required():
+        return {"authenticated": True, "auth_required": False}
+    return {
+        "authenticated": is_authenticated(request),
+        "auth_required": True,
+    }
 
 
 @router.get("/admin/login", response_class=HTMLResponse)
@@ -118,14 +302,35 @@ async def admin_login_page(request: Request):
         return RedirectResponse(url="/admin", status_code=302)
     if is_authenticated(request):
         return RedirectResponse(url="/admin", status_code=302)
-    return templates.TemplateResponse("login.html", {"request": request, "error": None})
+    csrf_token = generate_csrf_token()
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "error": None,
+        "username": None,
+        "csrf_token": csrf_token,
+    })
 
 
 @router.post("/admin/login")
-async def admin_login(request: Request, password: str = Form(...)):
-    """Handle admin login."""
+@limiter.limit(lambda: get_settings().rate_limit_auth)
+async def admin_login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    """Handle admin login with rate limiting and CSRF protection."""
     audit = get_audit_logger()
     client_ip = get_client_ip(request)
+
+    # Validate CSRF token
+    if not validate_csrf_token(csrf_token):
+        new_csrf = generate_csrf_token()
+        return templates.TemplateResponse(
+            "login.html",
+            {"request": request, "error": "Invalid or expired form. Please try again.", "username": username, "csrf_token": new_csrf},
+            status_code=400,
+        )
 
     # Redirect to setup if first launch
     if is_setup_required():
@@ -134,10 +339,13 @@ async def admin_login(request: Request, password: str = Form(...)):
     if not is_admin_auth_required():
         return RedirectResponse(url="/admin", status_code=302)
 
-    if verify_password(password):
-        # Create session
-        session_id = secrets.token_urlsafe(32)
-        _sessions[session_id] = True
+    user = verify_password(username, password)
+    if user:
+        # Create session using thread-safe function
+        session_id = create_session({
+            "username": user["username"],
+            "role": user["role"],
+        })
 
         audit.log_auth("login", success=True, ip_address=client_ip)
 
@@ -147,29 +355,31 @@ async def admin_login(request: Request, password: str = Form(...)):
             value=session_id,
             httponly=True,
             samesite="lax",
-            max_age=86400,  # 24 hours
+            secure=not get_settings().debug,  # Secure in production
+            max_age=SESSION_MAX_AGE,
         )
         return response
-    else:
-        audit.log_auth("login", success=False, ip_address=client_ip)
-        return templates.TemplateResponse(
-            "login.html",
-            {"request": request, "error": "Invalid password"},
-            status_code=401,
-        )
+
+    audit.log_auth("login", success=False, ip_address=client_ip)
+    new_csrf = generate_csrf_token()
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "error": "Invalid username or password", "username": username, "csrf_token": new_csrf},
+        status_code=401,
+    )
 
 
 @router.get("/admin/logout")
 async def admin_logout(request: Request):
     """Handle admin logout."""
     session_id = request.cookies.get("pika_session")
-    if session_id and session_id in _sessions:
-        del _sessions[session_id]
+    if session_id:
+        delete_session(session_id)
 
     audit = get_audit_logger()
     audit.log_auth("logout", success=True, ip_address=get_client_ip(request))
 
-    response = RedirectResponse(url="/", status_code=302)
+    response = RedirectResponse(url="/admin/login", status_code=302)
     response.delete_cookie("pika_session")
     return response
 
@@ -179,7 +389,8 @@ async def setup_page(request: Request):
     """Serve the setup page for first launch."""
     if not is_setup_required():
         return RedirectResponse(url="/admin", status_code=302)
-    return templates.TemplateResponse("setup.html", {"request": request, "error": None})
+    csrf_token = generate_csrf_token()
+    return templates.TemplateResponse("setup.html", {"request": request, "error": None, "csrf_token": csrf_token})
 
 
 @router.post("/setup")
@@ -189,24 +400,36 @@ async def setup_submit(
     password: str = Form(...),
     password_confirm: str = Form(...),
     generate_api_key: bool = Form(False),
+    csrf_token: str = Form(...),
 ):
-    """Handle setup form submission."""
+    """Handle setup form submission with CSRF protection."""
+    # Validate CSRF token first
+    if not validate_csrf_token(csrf_token):
+        new_csrf = generate_csrf_token()
+        return templates.TemplateResponse(
+            "setup.html",
+            {"request": request, "error": "Invalid or expired form. Please try again.", "username": username, "csrf_token": new_csrf},
+            status_code=400,
+        )
+
     if not is_setup_required():
         return RedirectResponse(url="/admin", status_code=302)
 
     # Validate passwords match
     if password != password_confirm:
+        new_csrf = generate_csrf_token()
         return templates.TemplateResponse(
             "setup.html",
-            {"request": request, "error": "Passwords do not match", "username": username},
+            {"request": request, "error": "Passwords do not match", "username": username, "csrf_token": new_csrf},
             status_code=400,
         )
 
     # Validate password length
     if len(password) < 6:
+        new_csrf = generate_csrf_token()
         return templates.TemplateResponse(
             "setup.html",
-            {"request": request, "error": "Password must be at least 6 characters", "username": username},
+            {"request": request, "error": "Password must be at least 6 characters", "username": username, "csrf_token": new_csrf},
             status_code=400,
         )
 
@@ -226,8 +449,10 @@ async def setup_submit(
     audit.log_admin_action("setup_complete", {"username": username, "api_key_generated": generate_api_key})
 
     # Create session and redirect to admin
-    session_id = secrets.token_urlsafe(32)
-    _sessions[session_id] = True
+    session_id = create_session({
+        "username": username,
+        "role": "admin",
+    })
 
     response = RedirectResponse(url="/admin", status_code=302)
     response.set_cookie(
@@ -235,7 +460,8 @@ async def setup_submit(
         value=session_id,
         httponly=True,
         samesite="lax",
-        max_age=86400,
+        secure=not get_settings().debug,
+        max_age=SESSION_MAX_AGE,
     )
     return response
 
@@ -243,6 +469,7 @@ async def setup_submit(
 @router.get("/documents")
 async def list_documents(
     processor: DocumentProcessor = Depends(get_document_processor),
+    _: bool = Depends(require_admin_auth),
 ) -> list[dict]:
     """List all documents in the documents directory."""
     documents = processor.list_documents()
@@ -262,11 +489,16 @@ async def list_documents(
 async def upload_document(
     file: UploadFile,
     settings: Settings = Depends(get_settings),
+    _: bool = Depends(require_admin_or_api_auth),
 ) -> dict:
     """Upload a document to the documents directory."""
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="Filename required")
+
+    filename = file.filename
     # Validate file extension
     allowed_extensions = {".pdf", ".docx", ".txt", ".md"}
-    file_ext = Path(file.filename).suffix.lower()
+    file_ext = Path(filename).suffix.lower()
 
     if file_ext not in allowed_extensions:
         raise HTTPException(
@@ -274,21 +506,30 @@ async def upload_document(
             detail=f"File type not allowed. Allowed: {', '.join(allowed_extensions)}",
         )
 
+    # Check file size by reading content length header or actual content
+    max_size_bytes = settings.max_upload_size_mb * 1024 * 1024
+    content = await file.read()
+
+    if len(content) > max_size_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {settings.max_upload_size_mb}MB",
+        )
+
     # Ensure documents directory exists
     docs_dir = Path(settings.documents_dir)
     docs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save file
-    file_path = docs_dir / file.filename
+    # Save file (content already read for size check)
+    file_path = docs_dir / filename
 
     try:
-        content = await file.read()
         file_path.write_bytes(content)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
 
     return {
-        "filename": file.filename,
+        "filename": filename,
         "size_bytes": len(content),
         "status": "uploaded",
     }
@@ -298,6 +539,7 @@ async def upload_document(
 async def delete_document(
     filename: str,
     settings: Settings = Depends(get_settings),
+    _: bool = Depends(require_admin_or_api_auth),
 ) -> dict:
     """Delete a document from the documents directory."""
     docs_dir = Path(settings.documents_dir)
@@ -336,7 +578,221 @@ async def admin_logs_page(request: Request):
     audit = get_audit_logger()
     logs = audit.get_recent_logs(100)
 
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         "logs.html",
         {"request": request, "logs": logs},
     )
+    # Prevent browser from caching authenticated pages
+    for header, value in NO_CACHE_HEADERS.items():
+        response.headers[header] = value
+    return response
+
+
+@router.get("/admin/backup")
+async def download_backup(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Download a backup zip containing all PIKA data."""
+    import io
+    import zipfile
+    from datetime import datetime
+
+    from fastapi.responses import StreamingResponse
+
+    if is_admin_auth_required() and not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    data_dir = Path(settings.chroma_persist_dir).parent
+    docs_dir = Path(settings.documents_dir)
+
+    # Create zip in memory
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Add documents
+        if docs_dir.exists():
+            for file_path in docs_dir.rglob("*"):
+                if file_path.is_file():
+                    arcname = f"documents/{file_path.relative_to(docs_dir)}"
+                    zf.write(file_path, arcname)
+
+        # Add ChromaDB data
+        chroma_dir = Path(settings.chroma_persist_dir)
+        if chroma_dir.exists():
+            for file_path in chroma_dir.rglob("*"):
+                if file_path.is_file():
+                    arcname = f"chroma/{file_path.relative_to(chroma_dir)}"
+                    zf.write(file_path, arcname)
+
+        # Add config.json
+        config_path = data_dir / "config.json"
+        if config_path.exists():
+            zf.write(config_path, "config.json")
+
+        # Add audit.log
+        audit_path = Path(settings.audit_log_path)
+        if audit_path.exists():
+            zf.write(audit_path, "audit.log")
+
+        # Add history.json
+        history_path = data_dir / "history.json"
+        if history_path.exists():
+            zf.write(history_path, "history.json")
+
+        # Add feedback.json
+        feedback_path = data_dir / "feedback.json"
+        if feedback_path.exists():
+            zf.write(feedback_path, "feedback.json")
+
+    zip_buffer.seek(0)
+
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_admin_action("backup_download", {})
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"pika_backup_{timestamp}.zip"
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+def _safe_extract_path(base_dir: Path, rel_path: str) -> Path | None:
+    """Safely resolve a path ensuring it stays within base_dir (prevents Zip Slip).
+
+    Returns None if the path would escape the base directory.
+    """
+    try:
+        # Resolve both paths to absolute
+        base_resolved = base_dir.resolve()
+        dest_path = (base_dir / rel_path).resolve()
+        # Use relative_to which raises ValueError if dest is not under base
+        dest_path.relative_to(base_resolved)
+        return dest_path
+    except (ValueError, OSError):
+        return None
+
+
+@router.post("/admin/restore")
+async def restore_backup(
+    request: Request,
+    file: UploadFile,
+    settings: Settings = Depends(get_settings),
+):
+    """Restore PIKA data from a backup zip."""
+    import io
+    import shutil
+    import zipfile
+
+    if is_admin_auth_required() and not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    if not file.filename or not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="File must be a .zip archive")
+
+    data_dir = Path(settings.chroma_persist_dir).parent
+    docs_dir = Path(settings.documents_dir)
+    chroma_dir = Path(settings.chroma_persist_dir)
+
+    try:
+        content = await file.read()
+        zip_buffer = io.BytesIO(content)
+
+        with zipfile.ZipFile(zip_buffer, "r") as zf:
+            # Validate zip contents
+            namelist = zf.namelist()
+            has_documents = any(n.startswith("documents/") for n in namelist)
+            has_chroma = any(n.startswith("chroma/") for n in namelist)
+
+            if not has_documents and not has_chroma and "config.json" not in namelist:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid backup file: missing expected data",
+                )
+
+            # Validate all paths before extracting (Zip Slip prevention)
+            for name in namelist:
+                if name.startswith("documents/") and not name.endswith("/"):
+                    rel_path = name[len("documents/"):]
+                    if _safe_extract_path(docs_dir, rel_path) is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid path in archive: {name}",
+                        )
+                elif name.startswith("chroma/") and not name.endswith("/"):
+                    rel_path = name[len("chroma/"):]
+                    if _safe_extract_path(chroma_dir, rel_path) is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid path in archive: {name}",
+                        )
+
+            # Clear and restore documents
+            if has_documents:
+                if docs_dir.exists():
+                    shutil.rmtree(docs_dir)
+                docs_dir.mkdir(parents=True, exist_ok=True)
+
+                for name in namelist:
+                    if name.startswith("documents/") and not name.endswith("/"):
+                        rel_path = name[len("documents/"):]
+                        dest_path = _safe_extract_path(docs_dir, rel_path)
+                        if dest_path:
+                            dest_path.parent.mkdir(parents=True, exist_ok=True)
+                            with zf.open(name) as src, open(dest_path, "wb") as dst:
+                                dst.write(src.read())
+
+            # Clear and restore ChromaDB
+            if has_chroma:
+                if chroma_dir.exists():
+                    shutil.rmtree(chroma_dir)
+                chroma_dir.mkdir(parents=True, exist_ok=True)
+
+                for name in namelist:
+                    if name.startswith("chroma/") and not name.endswith("/"):
+                        rel_path = name[len("chroma/"):]
+                        dest_path = _safe_extract_path(chroma_dir, rel_path)
+                        if dest_path:
+                            dest_path.parent.mkdir(parents=True, exist_ok=True)
+                            with zf.open(name) as src, open(dest_path, "wb") as dst:
+                                dst.write(src.read())
+
+            # Restore config.json
+            if "config.json" in namelist:
+                with zf.open("config.json") as src:
+                    config_path = data_dir / "config.json"
+                    config_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(config_path, "wb") as dst:
+                        dst.write(src.read())
+
+            # Restore history.json
+            if "history.json" in namelist:
+                with zf.open("history.json") as src:
+                    with open(data_dir / "history.json", "wb") as dst:
+                        dst.write(src.read())
+
+            # Restore feedback.json
+            if "feedback.json" in namelist:
+                with zf.open("feedback.json") as src:
+                    with open(data_dir / "feedback.json", "wb") as dst:
+                        dst.write(src.read())
+
+            # Note: We don't restore audit.log to preserve the current audit trail
+
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid zip file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
+
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_admin_action("backup_restore", {"filename": file.filename})
+
+    return {
+        "status": "restored",
+        "message": "Backup restored successfully. Please restart PIKA to reload the data.",
+    }

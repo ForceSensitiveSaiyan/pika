@@ -8,14 +8,53 @@
     <div class="header-left">
         <a href="/" class="logo">PIKA</a>
     </div>
-    <a href="/admin" class="header-link">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-        </svg>
-        Admin
-    </a>
+    <div class="header-right">
+        <button class="btn btn-ghost header-link" id="history-toggle" onclick="toggleHistory()">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            History
+        </button>
+        <a href="/admin" class="header-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            Admin
+        </a>
+    </div>
 </header>
+
+<!-- History Panel -->
+<div class="history-panel hidden" id="history-panel">
+    <div class="history-header">
+        <h3 class="history-title">Recent Queries</h3>
+        <button class="btn btn-ghost btn-icon" onclick="toggleHistory()" title="Close">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+        </button>
+    </div>
+    <div class="history-list" id="history-list">
+        <div class="history-empty">No recent queries</div>
+    </div>
+</div>
+
+<div class="onboarding-banner hidden" id="onboarding-banner">
+    <div class="onboarding-banner-content">
+        <span class="onboarding-banner-eyebrow">Get started</span>
+        <h2 class="onboarding-banner-title" id="onboarding-title">Add documents to start chatting</h2>
+        <p class="onboarding-banner-text" id="onboarding-text">
+            Upload files in Admin, then refresh the index to enable answers.
+        </p>
+    </div>
+    <div class="onboarding-banner-actions">
+        <button class="btn btn-secondary hidden" id="onboarding-refresh" type="button">Refresh Index</button>
+        <a class="btn btn-primary" href="/admin">Open Admin</a>
+    </div>
+</div>
 
 <!-- Chat Layout -->
 <div class="chat-layout">
@@ -43,6 +82,9 @@
             <button type="submit" class="btn btn-primary chat-send-btn" id="send-btn">
                 Send
             </button>
+            <button type="button" class="btn btn-danger chat-send-btn hidden" id="stop-btn" onclick="cancelQuery()">
+                Stop
+            </button>
         </form>
     </div>
 </div>
@@ -55,14 +97,18 @@
 <script>
     let isLoading = false;
     let messageCounter = 0;
-    let chatHistory = []; // {type, content, result?}
+    let chatHistory = []; // {type, content, result?, queryId?}
     let queryPollingInterval = null;
     let currentLoadingId = null;
+    let currentQueryId = null;
+    let historyVisible = false;
 
     // Restore chat history on page load
     document.addEventListener('DOMContentLoaded', () => {
         restoreChatHistory();
+        updateOnboarding();
         checkActiveQuery();
+        loadHistory();
     });
 
     function saveChatHistory() {
@@ -86,7 +132,7 @@
                 if (msg.type === 'user') {
                     addMessage(msg.content, 'user');
                 } else if (msg.type === 'assistant' && msg.result) {
-                    addAnswerMessage(msg.result);
+                    addAnswerMessage(msg.result, msg.queryId);
                 } else if (msg.type === 'error') {
                     addMessage(msg.content, 'error');
                 }
@@ -97,21 +143,90 @@
         }
     }
 
+    // ==================== History Panel ====================
+
+    function toggleHistory() {
+        const panel = document.getElementById('history-panel');
+        historyVisible = !historyVisible;
+        if (historyVisible) {
+            panel.classList.remove('hidden');
+            loadHistory();
+        } else {
+            panel.classList.add('hidden');
+        }
+    }
+
+    async function loadHistory() {
+        const list = document.getElementById('history-list');
+        try {
+            const response = await fetch('/api/v1/history?limit=20');
+            if (!response.ok) throw new Error('Failed to load history');
+
+            const entries = await response.json();
+
+            if (entries.length === 0) {
+                list.innerHTML = '<div class="history-empty">No recent queries</div>';
+                return;
+            }
+
+            list.innerHTML = entries.map(entry => `
+                <div class="history-item" onclick="runHistoryQuery('${escapeHtml(entry.question.replace(/'/g, "\\'"))}')">
+                    <div class="history-question">${escapeHtml(entry.question)}</div>
+                    <div class="history-meta">
+                        <span class="confidence confidence-${entry.confidence}">
+                            <span class="confidence-dot"></span>
+                            ${entry.confidence}
+                        </span>
+                        <span class="history-time">${formatTime(entry.timestamp)}</span>
+                    </div>
+                </div>
+            `).join('');
+        } catch (error) {
+            console.error('Failed to load history:', error);
+            list.innerHTML = '<div class="history-empty">Failed to load history</div>';
+        }
+    }
+
+    function runHistoryQuery(question) {
+        const input = document.getElementById('question-input');
+        input.value = question;
+        toggleHistory();
+        document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+    }
+
+    function formatTime(isoString) {
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffMins = Math.floor(diffMs / 60000);
+        const diffHours = Math.floor(diffMs / 3600000);
+        const diffDays = Math.floor(diffMs / 86400000);
+
+        if (diffMins < 1) return 'just now';
+        if (diffMins < 60) return `${diffMins}m ago`;
+        if (diffHours < 24) return `${diffHours}h ago`;
+        if (diffDays < 7) return `${diffDays}d ago`;
+        return date.toLocaleDateString();
+    }
+
+    // ==================== Query Status ====================
+
     async function checkActiveQuery() {
         try {
             const response = await fetch('/api/v1/query/status');
             const status = await response.json();
 
             if (status.status === 'running') {
-                // There's an active query - show loading and start polling
                 isLoading = true;
                 updateSendButton();
+                currentQueryId = status.query_id;
 
-                // Remove welcome if present
                 const welcome = document.getElementById('welcome');
                 if (welcome) welcome.remove();
 
-                // Check if question is already in history
+                const onboarding = document.getElementById('onboarding-banner');
+                if (onboarding) onboarding.classList.add('hidden');
+
                 const lastMsg = chatHistory[chatHistory.length - 1];
                 if (!lastMsg || lastMsg.type !== 'user' || lastMsg.content !== status.question) {
                     addMessage(status.question, 'user');
@@ -122,24 +237,42 @@
                 currentLoadingId = addMessage('Thinking', 'assistant', true);
                 startQueryPolling();
             } else if (status.status === 'completed' && status.result) {
-                // Query completed while we were away - show the result
                 const welcome = document.getElementById('welcome');
                 if (welcome) welcome.remove();
 
-                // Check if question is in history but answer isn't
+                const onboarding = document.getElementById('onboarding-banner');
+                if (onboarding) onboarding.classList.add('hidden');
+
                 const lastMsg = chatHistory[chatHistory.length - 1];
                 if (lastMsg && lastMsg.type === 'user' && lastMsg.content === status.question) {
-                    // Add the answer
-                    addAnswerMessage(status.result);
-                    chatHistory.push({ type: 'assistant', result: status.result });
+                    addAnswerMessage(status.result, status.query_id);
+                    chatHistory.push({ type: 'assistant', result: status.result, queryId: status.query_id });
                     saveChatHistory();
                 }
 
-                // Clear the server-side status
                 await fetch('/api/v1/query/status', { method: 'DELETE' });
+            } else if (status.status === 'none') {
+                // No active query on backend - check if frontend thinks one is running (stale state)
+                // This can happen after container restart while frontend still has cached state
+                const lastMsg = chatHistory[chatHistory.length - 1];
+                if (lastMsg && lastMsg.type === 'user') {
+                    // Last message was a user question with no answer - might be stale
+                    // Check if there's a loading message we need to clean up
+                    const loadingMsgs = document.querySelectorAll('.message-loading');
+                    if (loadingMsgs.length > 0) {
+                        loadingMsgs.forEach(el => el.remove());
+                        showToast('Previous query was interrupted', 'info');
+                    }
+                }
+                // Reset loading state just in case
+                isLoading = false;
+                updateSendButton();
             }
         } catch (error) {
             console.error('Failed to check query status:', error);
+            // On error, reset to safe state
+            isLoading = false;
+            updateSendButton();
         }
     }
 
@@ -160,18 +293,17 @@
                     }
 
                     if (status.result) {
-                        addAnswerMessage(status.result);
-                        chatHistory.push({ type: 'assistant', result: status.result });
+                        addAnswerMessage(status.result, status.query_id);
+                        chatHistory.push({ type: 'assistant', result: status.result, queryId: status.query_id });
                         saveChatHistory();
                     }
 
                     isLoading = false;
                     updateSendButton();
-
-                    // Clear server-side status
+                    await updateOnboarding();
                     await fetch('/api/v1/query/status', { method: 'DELETE' });
 
-                } else if (status.status === 'error') {
+                } else if (status.status === 'error' || status.status === 'cancelled') {
                     stopQueryPolling();
 
                     if (currentLoadingId) {
@@ -179,16 +311,33 @@
                         currentLoadingId = null;
                     }
 
-                    const errorMsg = 'Error: ' + (status.error || 'Query failed');
+                    const errorMsg = status.status === 'cancelled'
+                        ? 'Query was cancelled'
+                        : 'Error: ' + (status.error || 'Query failed');
                     addMessage(errorMsg, 'error');
                     chatHistory.push({ type: 'error', content: errorMsg });
                     saveChatHistory();
 
                     isLoading = false;
                     updateSendButton();
-
-                    // Clear server-side status
                     await fetch('/api/v1/query/status', { method: 'DELETE' });
+
+                } else if (status.status === 'none' && isLoading) {
+                    // Stale query detection: backend has no query but frontend thinks one is running
+                    // This can happen after container restart
+                    console.warn('Stale query detected - resetting UI state');
+                    stopQueryPolling();
+
+                    if (currentLoadingId) {
+                        removeMessage(currentLoadingId);
+                        currentLoadingId = null;
+                    }
+
+                    // Don't add error message, just reset silently or show info
+                    showToast('Query state was reset', 'info');
+
+                    isLoading = false;
+                    updateSendButton();
                 }
             } catch (error) {
                 console.error('Failed to poll query status:', error);
@@ -203,6 +352,71 @@
         }
     }
 
+    // ==================== Onboarding ====================
+
+    async function updateOnboarding() {
+        const banner = document.getElementById('onboarding-banner');
+        const title = document.getElementById('onboarding-title');
+        const text = document.getElementById('onboarding-text');
+        const refreshButton = document.getElementById('onboarding-refresh');
+
+        try {
+            const [documentsResponse, statsResponse] = await Promise.all([
+                fetch('/documents'),
+                fetch('/api/v1/index/stats')
+            ]);
+
+            if (!documentsResponse.ok || !statsResponse.ok) {
+                banner.classList.add('hidden');
+                return;
+            }
+
+            const documents = await documentsResponse.json();
+            const stats = await statsResponse.json();
+
+            if (!documents.length) {
+                title.textContent = 'Add documents to start chatting';
+                text.textContent = 'Upload files in Admin, then refresh the index to enable answers.';
+                refreshButton.classList.add('hidden');
+                banner.classList.remove('hidden');
+                return;
+            }
+
+            if (stats.total_chunks === 0) {
+                title.textContent = 'Index your documents';
+                text.textContent = 'Your files are uploaded. Refresh the index so PIKA can answer questions.';
+                refreshButton.classList.remove('hidden');
+                banner.classList.remove('hidden');
+                return;
+            }
+
+            banner.classList.add('hidden');
+        } catch (error) {
+            console.error('Failed to update onboarding banner:', error);
+            banner.classList.add('hidden');
+        }
+    }
+
+    async function refreshIndexFromBanner() {
+        const refreshButton = document.getElementById('onboarding-refresh');
+        refreshButton.disabled = true;
+        refreshButton.innerHTML = '<span class="spinner"></span>';
+
+        try {
+            const response = await fetch('/api/v1/index', { method: 'POST' });
+            if (!response.ok) throw new Error('Failed to refresh index');
+            showToast('Index refreshed', 'success');
+            await updateOnboarding();
+        } catch (error) {
+            showToast('Failed to refresh index', 'error');
+        } finally {
+            refreshButton.disabled = false;
+            refreshButton.textContent = 'Refresh Index';
+        }
+    }
+
+    // ==================== Send Question ====================
+
     async function sendQuestion(event) {
         event.preventDefault();
 
@@ -215,16 +429,16 @@
         isLoading = true;
         updateSendButton();
 
-        // Remove welcome
         const welcome = document.getElementById('welcome');
         if (welcome) welcome.remove();
 
-        // Add user message
+        const onboarding = document.getElementById('onboarding-banner');
+        if (onboarding) onboarding.classList.add('hidden');
+
         addMessage(question, 'user');
         chatHistory.push({ type: 'user', content: question });
         saveChatHistory();
 
-        // Add loading message
         currentLoadingId = addMessage('Thinking', 'assistant', true);
 
         try {
@@ -240,7 +454,7 @@
                 throw new Error(result.detail || 'Query failed');
             }
 
-            // Query started - begin polling for result
+            currentQueryId = result.query_id;
             startQueryPolling();
 
         } catch (error) {
@@ -255,6 +469,8 @@
             updateSendButton();
         }
     }
+
+    // ==================== Messages ====================
 
     function addMessage(content, type, isLoading = false) {
         const container = document.getElementById('chat-messages');
@@ -277,10 +493,12 @@
         return id;
     }
 
-    function addAnswerMessage(result) {
+    function addAnswerMessage(result, queryId) {
         const container = document.getElementById('chat-messages');
+        const msgId = 'msg-' + (messageCounter++);
 
         const div = document.createElement('div');
+        div.id = msgId;
         div.className = 'message message-assistant';
 
         let sourcesHtml = '';
@@ -294,22 +512,60 @@
             `;
         }
 
-        const confidenceHtml = `
-            <div class="message-footer">
-                <span class="confidence confidence-${result.confidence}">
-                    <span class="confidence-dot"></span>
-                    ${result.confidence}
-                </span>
-            </div>
-        `;
+        // Check if this is a "no results" response
+        const isNoResults = result.confidence === 'none';
+        let noResultsHint = '';
+        if (isNoResults) {
+            noResultsHint = `
+                <div class="no-results-hint">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    Try checking if your documents are indexed in <a href="/admin">Admin</a>
+                </div>
+            `;
+        }
+
+        const safeAnswer = escapeHtml(result.answer);
+        const safeQuestion = chatHistory.filter(m => m.type === 'user').pop()?.content || '';
 
         div.innerHTML = `
             <div class="message-bubble">
-                <div class="message-content">${escapeHtml(result.answer)}</div>
+                <div class="message-content">${safeAnswer}</div>
                 ${sourcesHtml}
-                ${confidenceHtml}
+                ${noResultsHint}
+                <div class="message-footer">
+                    <span class="confidence confidence-${result.confidence}">
+                        <span class="confidence-dot"></span>
+                        ${result.confidence}
+                    </span>
+                    <div class="message-actions">
+                        <button class="action-btn" onclick="copyAnswer(this, '${msgId}')" title="Copy answer">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                        </button>
+                        <button class="action-btn feedback-btn" onclick="submitFeedback('${queryId || ''}', 'up', this)" title="Helpful" data-rating="">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
+                            </svg>
+                        </button>
+                        <button class="action-btn feedback-btn" onclick="submitFeedback('${queryId || ''}', 'down', this)" title="Not helpful" data-rating="">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
             </div>
         `;
+
+        // Store answer text for copy
+        div.dataset.answer = result.answer;
+        div.dataset.question = safeQuestion;
 
         container.appendChild(div);
         container.scrollTop = container.scrollHeight;
@@ -320,10 +576,108 @@
         if (el) el.remove();
     }
 
+    // ==================== Actions ====================
+
+    async function copyAnswer(btn, msgId) {
+        const msgEl = document.getElementById(msgId);
+        if (!msgEl) return;
+
+        const answer = msgEl.dataset.answer;
+        if (!answer) return;
+
+        try {
+            await navigator.clipboard.writeText(answer);
+            btn.classList.add('action-btn-success');
+            setTimeout(() => btn.classList.remove('action-btn-success'), 1500);
+        } catch (error) {
+            console.error('Failed to copy:', error);
+            showToast('Failed to copy', 'error');
+        }
+    }
+
+    async function submitFeedback(queryId, rating, btn) {
+        const msgEl = btn.closest('.message');
+        if (!msgEl) return;
+
+        const question = msgEl.dataset.question || '';
+        const answer = msgEl.dataset.answer || '';
+
+        // Find sibling feedback buttons and update their state
+        const footer = btn.closest('.message-actions');
+        const feedbackBtns = footer.querySelectorAll('.feedback-btn');
+
+        feedbackBtns.forEach(b => {
+            b.classList.remove('action-btn-active');
+            b.dataset.rating = '';
+        });
+
+        btn.classList.add('action-btn-active');
+        btn.dataset.rating = rating;
+
+        try {
+            await fetch('/api/v1/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    query_id: queryId,
+                    question: question,
+                    answer: answer,
+                    rating: rating
+                })
+            });
+        } catch (error) {
+            console.error('Failed to submit feedback:', error);
+        }
+    }
+
+    // ==================== Utilities ====================
+
     function updateSendButton() {
-        const btn = document.getElementById('send-btn');
-        btn.disabled = isLoading;
-        btn.innerHTML = isLoading ? '<span class="spinner"></span>' : 'Send';
+        const sendBtn = document.getElementById('send-btn');
+        const stopBtn = document.getElementById('stop-btn');
+
+        if (isLoading) {
+            sendBtn.classList.add('hidden');
+            stopBtn.classList.remove('hidden');
+        } else {
+            sendBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+        }
+    }
+
+    async function cancelQuery() {
+        const stopBtn = document.getElementById('stop-btn');
+        stopBtn.disabled = true;
+        stopBtn.innerHTML = '<span class="spinner"></span>';
+
+        try {
+            const response = await fetch('/api/v1/query/cancel', { method: 'POST' });
+            const result = await response.json();
+
+            if (result.cancelled) {
+                showToast('Query cancelled', 'info');
+            }
+        } catch (error) {
+            console.error('Failed to cancel query:', error);
+        }
+
+        // Reset UI state regardless of cancel result
+        stopQueryPolling();
+        if (currentLoadingId) {
+            removeMessage(currentLoadingId);
+            currentLoadingId = null;
+        }
+        addMessage('Query cancelled', 'error');
+        chatHistory.push({ type: 'error', content: 'Query cancelled' });
+        saveChatHistory();
+
+        isLoading = false;
+        stopBtn.disabled = false;
+        stopBtn.textContent = 'Stop';
+        updateSendButton();
+
+        // Clear server-side query status
+        await fetch('/api/v1/query/status', { method: 'DELETE' });
     }
 
     function escapeHtml(text) {
@@ -345,7 +699,10 @@
         }, 3000);
     }
 
-    // Allow Enter to submit (Shift+Enter for new line would need textarea)
+    document.getElementById('onboarding-refresh').addEventListener('click', () => {
+        refreshIndexFromBanner();
+    });
+
     document.getElementById('question-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();

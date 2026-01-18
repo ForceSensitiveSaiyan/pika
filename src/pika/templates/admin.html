@@ -197,7 +197,24 @@
     let pullPollingInterval = null;
 
     // Initialize
-    document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('DOMContentLoaded', async () => {
+        // Check authentication before loading page content
+        // This handles the back-button after logout scenario
+        try {
+            const authResponse = await fetch('/auth/check');
+            const authStatus = await authResponse.json();
+            if (authStatus.auth_required && !authStatus.authenticated) {
+                // User is not authenticated - redirect to login
+                window.location.replace('/admin/login');
+                return;
+            }
+        } catch (error) {
+            console.error('Auth check failed:', error);
+            // On auth check failure, redirect to login to be safe
+            window.location.replace('/admin/login');
+            return;
+        }
+
         loadModels();
         loadDocuments();
         loadStats();
