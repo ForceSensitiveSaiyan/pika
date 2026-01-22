@@ -105,26 +105,40 @@ class QueryStatus:
         }
 
 
-# Global query status tracker
-_active_query: QueryStatus | None = None
-_query_task: asyncio.Task | None = None
+# Per-user query status tracking
+_active_queries: dict[str, QueryStatus] = {}
+_query_tasks: dict[str, asyncio.Task] = {}
+
+# Key for anonymous users
+ANONYMOUS_USER = "__anonymous__"
 
 
-def get_active_query() -> QueryStatus | None:
-    """Get the currently active or most recent query status."""
-    return _active_query
+def _get_user_key(username: str | None) -> str:
+    """Get the key for storing user-specific query data."""
+    return username if username else ANONYMOUS_USER
 
 
-def clear_query_status() -> None:
-    """Clear the query status."""
-    global _active_query
-    _active_query = None
+def get_active_query(username: str | None = None) -> QueryStatus | None:
+    """Get the currently active or most recent query status for a user."""
+    key = _get_user_key(username)
+    return _active_queries.get(key)
 
 
-def _set_query_status(status: QueryStatus | None) -> None:
-    """Set the query status."""
-    global _active_query
-    _active_query = status
+def clear_query_status(username: str | None = None) -> None:
+    """Clear the query status for a user."""
+    key = _get_user_key(username)
+    if key in _active_queries:
+        del _active_queries[key]
+
+
+def _set_query_status(status: QueryStatus | None, username: str | None = None) -> None:
+    """Set the query status for a user."""
+    key = _get_user_key(username)
+    if status is None:
+        if key in _active_queries:
+            del _active_queries[key]
+    else:
+        _active_queries[key] = status
 
 
 class RAGEngine:
@@ -428,24 +442,28 @@ def get_rag_engine() -> RAGEngine:
     return _rag_engine
 
 
-def is_query_running() -> bool:
-    """Check if a query task is currently running."""
-    return _query_task is not None and not _query_task.done()
+def is_query_running(username: str | None = None) -> bool:
+    """Check if a query task is currently running for a user."""
+    key = _get_user_key(username)
+    task = _query_tasks.get(key)
+    return task is not None and not task.done()
 
 
-def cancel_query() -> bool:
-    """Cancel the currently running query task.
+def cancel_query(username: str | None = None) -> bool:
+    """Cancel the currently running query task for a user.
 
     Returns True if a query was cancelled, False if no query was running.
     """
-    global _query_task, _active_query
+    key = _get_user_key(username)
+    task = _query_tasks.get(key)
+    query = _active_queries.get(key)
 
-    if _query_task is not None and not _query_task.done():
-        _query_task.cancel()
-        if _active_query:
-            _active_query.status = "cancelled"
-            _active_query.error = "Query was cancelled by user"
-        logger.info("Query cancelled by user")
+    if task is not None and not task.done():
+        task.cancel()
+        if query:
+            query.status = "cancelled"
+            query.error = "Query was cancelled by user"
+        logger.info(f"Query cancelled by user: {username or 'anonymous'}")
         return True
     return False
 
@@ -454,10 +472,13 @@ def cancel_query() -> bool:
 QUERY_TIMEOUT = 300
 
 
-async def start_query_task(question: str, query_id: str, top_k: int | None = None) -> QueryStatus:
-    """Start a background query task."""
-    global _query_task
-
+async def start_query_task(
+    question: str,
+    query_id: str,
+    top_k: int | None = None,
+    username: str | None = None,
+) -> QueryStatus:
+    """Start a background query task for a specific user."""
     # Import here to avoid circular import
     from pika.services.audit import get_audit_logger
     from pika.services.app_config import get_app_config
@@ -465,7 +486,7 @@ async def start_query_task(question: str, query_id: str, top_k: int | None = Non
 
     # Create query status
     query_status = QueryStatus(query_id=query_id, question=question, status="running")
-    _set_query_status(query_status)
+    _set_query_status(query_status, username)
 
     async def run_query():
         try:
@@ -495,6 +516,7 @@ async def start_query_task(question: str, query_id: str, top_k: int | None = Non
                 answer=result.answer,
                 confidence=result.confidence.value,
                 sources=[s.filename for s in result.sources],
+                username=username,
             )
         except asyncio.CancelledError:
             # Query was cancelled by user
@@ -530,5 +552,6 @@ async def start_query_task(question: str, query_id: str, top_k: int | None = Non
                 error=str(e),
             )
 
-    _query_task = asyncio.create_task(run_query())
+    key = _get_user_key(username)
+    _query_tasks[key] = asyncio.create_task(run_query())
     return query_status

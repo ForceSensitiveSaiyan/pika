@@ -10,7 +10,8 @@ from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from pika.api.web import require_admin_auth, require_admin_or_api_auth
+from pika.api.web import get_current_user, require_admin_auth, require_admin_or_api_auth, require_user_auth
+from pika.services.auth import AuthService, get_auth_service
 from pika.config import get_settings
 from pika.services.app_config import AppConfigService, get_app_config
 from pika.services.audit import get_audit_logger
@@ -491,12 +492,15 @@ async def query_documents(
 ) -> QueryStartResponse:
     """Start a background query to the RAG system with rate limiting."""
     query_id = str(uuid.uuid4())[:8]
+    user = get_current_user(request)
+    username = user.get("username") if user else None
 
     try:
         await start_query_task(
             question=query.question,
             query_id=query_id,
             top_k=query.top_k,
+            username=username,
         )
         return QueryStartResponse(query_id=query_id, status="running")
     except Exception as e:
@@ -506,10 +510,13 @@ async def query_documents(
 
 @router.get("/query/status", response_model=QueryStatusResponse)
 async def get_query_status(
+    request: Request,
     _: bool = Depends(require_admin_or_api_auth),
 ) -> QueryStatusResponse:
-    """Get the status of the current or most recent query."""
-    query = get_active_query()
+    """Get the status of the current or most recent query for the current user."""
+    user = get_current_user(request)
+    username = user.get("username") if user else None
+    query = get_active_query(username)
 
     if query is None:
         return QueryStatusResponse(
@@ -545,10 +552,13 @@ async def get_query_status(
 
 @router.delete("/query/status")
 async def clear_query(
+    request: Request,
     _: bool = Depends(require_admin_or_api_auth),
 ) -> dict:
-    """Clear the current query status."""
-    clear_query_status()
+    """Clear the current query status for the current user."""
+    user = get_current_user(request)
+    username = user.get("username") if user else None
+    clear_query_status(username)
     return {"status": "cleared"}
 
 
@@ -561,16 +571,20 @@ class CancelQueryResponse(BaseModel):
 
 @router.post("/query/cancel", response_model=CancelQueryResponse)
 async def cancel_running_query(
+    request: Request,
     _: bool = Depends(require_admin_or_api_auth),
 ) -> CancelQueryResponse:
-    """Cancel the currently running query."""
-    if not is_query_running():
+    """Cancel the currently running query for the current user."""
+    user = get_current_user(request)
+    username = user.get("username") if user else None
+
+    if not is_query_running(username):
         return CancelQueryResponse(
             cancelled=False,
             message="No query is currently running",
         )
 
-    cancelled = cancel_query()
+    cancelled = cancel_query(username)
     if cancelled:
         return CancelQueryResponse(
             cancelled=True,
@@ -607,12 +621,15 @@ class FeedbackRequest(BaseModel):
 
 @router.get("/history", response_model=list[HistoryEntry])
 async def get_history(
+    request: Request,
     limit: int = 20,
     history: HistoryService = Depends(get_history_service),
     _: bool = Depends(require_admin_or_api_auth),
 ) -> list[HistoryEntry]:
-    """Get recent query history."""
-    entries = history.get_history(limit=limit)
+    """Get recent query history for the current user."""
+    user = get_current_user(request)
+    username = user.get("username") if user else None
+    entries = history.get_history(limit=limit, username=username)
     return [
         HistoryEntry(
             id=e["id"],
@@ -628,11 +645,14 @@ async def get_history(
 
 @router.delete("/history")
 async def clear_history(
+    request: Request,
     history: HistoryService = Depends(get_history_service),
     _: bool = Depends(require_admin_or_api_auth),
 ) -> dict:
-    """Clear query history."""
-    history.clear_history()
+    """Clear query history for the current user."""
+    user = get_current_user(request)
+    username = user.get("username") if user else None
+    history.clear_history(username=username)
     return {"status": "cleared"}
 
 
@@ -653,3 +673,180 @@ async def submit_feedback(
         rating=request.rating,
     )
     return {"status": "received", "rating": request.rating}
+
+
+# --- User Management Endpoints ---
+
+
+class UserResponse(BaseModel):
+    """Response model for a user."""
+
+    id: int
+    username: str
+    role: str
+    is_active: bool
+    created_at: str
+    last_login: str | None
+
+
+class CreateUserRequest(BaseModel):
+    """Request model for creating a user."""
+
+    username: str
+    password: str
+    role: str = "user"
+
+
+class CreateUserResponse(BaseModel):
+    """Response model for creating a user."""
+
+    id: int
+    username: str
+    role: str
+
+
+class UpdatePasswordRequest(BaseModel):
+    """Request model for updating a password."""
+
+    password: str
+
+
+@router.get("/users", response_model=list[UserResponse])
+async def list_users(
+    auth: AuthService = Depends(get_auth_service),
+    _: bool = Depends(require_admin_auth),
+) -> list[UserResponse]:
+    """List all users (admin only)."""
+    users = auth.list_users()
+    return [
+        UserResponse(
+            id=u["id"],
+            username=u["username"],
+            role=u["role"],
+            is_active=bool(u["is_active"]),
+            created_at=u["created_at"],
+            last_login=u["last_login"],
+        )
+        for u in users
+    ]
+
+
+@router.post("/users", response_model=CreateUserResponse)
+async def create_user(
+    request: CreateUserRequest,
+    auth: AuthService = Depends(get_auth_service),
+    _: bool = Depends(require_admin_auth),
+) -> CreateUserResponse:
+    """Create a new user (admin only)."""
+    # Validate role
+    if request.role not in ("admin", "user"):
+        raise HTTPException(status_code=400, detail="Role must be 'admin' or 'user'")
+
+    # Validate password length
+    if len(request.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    # Validate username
+    if len(request.username) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+
+    try:
+        user = auth.create_user(request.username, request.password, request.role)
+
+        # Audit log
+        audit = get_audit_logger()
+        audit.log_admin_action("create_user", {"username": request.username, "role": request.role})
+
+        return CreateUserResponse(
+            id=user["id"],
+            username=user["username"],
+            role=user["role"],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/users/{user_id}/password")
+async def update_user_password(
+    user_id: int,
+    request: UpdatePasswordRequest,
+    auth: AuthService = Depends(get_auth_service),
+    _: bool = Depends(require_admin_auth),
+) -> dict:
+    """Update a user's password (admin only)."""
+    # Validate password length
+    if len(request.password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    # Check user exists
+    user = auth.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    success = auth.update_password(user_id, request.password)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update password")
+
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_admin_action("update_password", {"user_id": user_id, "username": user["username"]})
+
+    return {"status": "updated", "user_id": user_id}
+
+
+@router.put("/users/{user_id}/toggle")
+async def toggle_user(
+    user_id: int,
+    auth: AuthService = Depends(get_auth_service),
+    _: bool = Depends(require_admin_auth),
+) -> dict:
+    """Enable/disable a user (admin only)."""
+    # Check user exists
+    user = auth.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        if user["is_active"]:
+            auth.disable_user(user_id)
+            new_status = False
+        else:
+            auth.enable_user(user_id)
+            new_status = True
+
+        # Audit log
+        audit = get_audit_logger()
+        audit.log_admin_action(
+            "toggle_user",
+            {"user_id": user_id, "username": user["username"], "is_active": new_status},
+        )
+
+        return {"status": "toggled", "user_id": user_id, "is_active": new_status}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    auth: AuthService = Depends(get_auth_service),
+    _: bool = Depends(require_admin_auth),
+) -> dict:
+    """Delete a user (admin only)."""
+    # Check user exists
+    user = auth.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        success = auth.delete_user(user_id)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to delete user")
+
+        # Audit log
+        audit = get_audit_logger()
+        audit.log_admin_action("delete_user", {"user_id": user_id, "username": user["username"]})
+
+        return {"status": "deleted", "user_id": user_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
