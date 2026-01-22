@@ -1,3 +1,20 @@
+# PIKA Docker Compose Configuration
+#
+# Resource Limits:
+# ----------------
+# Adjust these based on your hardware:
+#
+# - Ollama (8GB default): Larger models need more RAM
+#   - 7B models: 8GB minimum
+#   - 13B models: 16GB recommended
+#   - 70B models: 48GB+ required
+#
+# - PIKA App (2GB default): Handles embeddings and ChromaDB
+#   - Can reduce to 1GB for small document sets
+#   - Increase to 4GB for very large indexes (10k+ documents)
+#
+# To disable limits (use all available resources), remove the deploy section.
+
 services:
   ollama:
     image: ollama/ollama:latest
@@ -13,6 +30,15 @@ services:
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Memory limit for Ollama - adjust based on model size
+          # 8GB works for 7B-8B models, increase for larger models
+          memory: 8G
+        reservations:
+          # Guaranteed memory - helps prevent OOM kills
+          memory: 4G
 
   pika:
     build:
@@ -23,13 +49,14 @@ services:
       - "8000:8000"
     volumes:
       - ./documents:/app/documents
-      - pika_chroma:/app/data/chroma
+      - pika_data:/app/data
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=llama3.1:8b
       - OLLAMA_TIMEOUT=300
       - DOCUMENTS_DIR=/app/documents
       - CHROMA_PERSIST_DIR=/app/data/chroma
+      - AUDIT_LOG_PATH=/app/data/audit.log
     depends_on:
       ollama:
         condition: service_started
@@ -40,9 +67,18 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Memory limit for PIKA app (embeddings + ChromaDB)
+          # 2GB is sufficient for most use cases
+          memory: 2G
+        reservations:
+          # Guaranteed memory
+          memory: 512M
 
 volumes:
   ollama_models:
     name: pika_ollama_models
-  pika_chroma:
-    name: pika_chroma_data
+  pika_data:
+    name: pika_data

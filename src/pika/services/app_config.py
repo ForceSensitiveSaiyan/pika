@@ -67,7 +67,7 @@ class AppConfigService:
 
     def is_setup_complete(self) -> bool:
         """Check if initial setup has been completed."""
-        return self.get("setup_complete", False)
+        return bool(self._config.get("setup_complete", False))
 
     def get_admin_credentials(self) -> dict | None:
         """Get stored admin credentials."""
@@ -80,6 +80,41 @@ class AppConfigService:
             "password_hash": password_hash,
         })
         self.set("setup_complete", True)
+
+    def get_users(self) -> list[dict]:
+        """Get list of configured users."""
+        users = self._config.get("users", [])
+        if isinstance(users, list):
+            return list(users)
+        return []
+
+    def set_users(self, users: list[dict]) -> None:
+        """Persist list of configured users."""
+        self.set("users", users)
+
+    def add_user(self, username: str, password_hash: str, role: str) -> None:
+        """Add a user to the config store."""
+        users = self.get_users()
+        users.append({
+            "username": username,
+            "password_hash": password_hash,
+            "role": role,
+        })
+        self.set_users(users)
+
+    def update_user_password(self, username: str, password_hash: str) -> None:
+        """Update an existing user's password hash."""
+        users = self.get_users()
+        for user in users:
+            if user.get("username") == username:
+                user["password_hash"] = password_hash
+                break
+        self.set_users(users)
+
+    def delete_user(self, username: str) -> None:
+        """Delete a user by username."""
+        users = [user for user in self.get_users() if user.get("username") != username]
+        self.set_users(users)
 
     def get_api_key(self) -> str | None:
         """Get stored API key."""

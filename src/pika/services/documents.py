@@ -1,11 +1,14 @@
 """Document processing service for loading and chunking documents."""
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from pika.config import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -187,7 +190,7 @@ class DocumentProcessor:
                 all_chunks.extend(chunks)
             except Exception as e:
                 # Log error but continue processing other documents
-                print(f"Error processing {doc_info.filename}: {e}")
+                logger.warning(f"Error processing {doc_info.filename}: {e}")
 
         return all_chunks
 

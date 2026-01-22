@@ -67,7 +67,14 @@ class HistoryService:
         except Exception as e:
             logger.error(f"Failed to save feedback: {e}")
 
-    def add_query(self, question: str, answer: str, confidence: str, sources: list[str]) -> str:
+    def add_query(
+        self,
+        question: str,
+        answer: str,
+        confidence: str,
+        sources: list[str],
+        username: str | None = None,
+    ) -> str:
         """Add a query to history. Returns the query ID."""
         with self._lock:
             query_id = f"q_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
@@ -79,6 +86,7 @@ class HistoryService:
                 "confidence": confidence,
                 "sources": sources,
                 "timestamp": datetime.utcnow().isoformat(),
+                "username": username,
             }
 
             self._history.insert(0, entry)
@@ -90,15 +98,23 @@ class HistoryService:
             self._save_history()
             return query_id
 
-    def get_history(self, limit: int = 20) -> list[dict]:
-        """Get recent query history."""
+    def get_history(self, limit: int = 20, username: str | None = None) -> list[dict]:
+        """Get recent query history, optionally filtered by username."""
         with self._lock:
+            if username:
+                # Filter by username
+                user_history = [h for h in self._history if h.get("username") == username]
+                return user_history[:limit]
             return self._history[:limit]
 
-    def clear_history(self) -> None:
-        """Clear all history."""
+    def clear_history(self, username: str | None = None) -> None:
+        """Clear history, optionally only for a specific user."""
         with self._lock:
-            self._history = []
+            if username:
+                # Only clear history for this user
+                self._history = [h for h in self._history if h.get("username") != username]
+            else:
+                self._history = []
             self._save_history()
 
     def add_feedback(
