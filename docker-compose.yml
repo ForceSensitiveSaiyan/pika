@@ -51,6 +51,7 @@ services:
       - ./documents:/app/documents
       - pika_data:/app/data
     environment:
+      - DEBUG=true  # Set to false if using HTTPS
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=llama3.1:8b
       - OLLAMA_TIMEOUT=300
