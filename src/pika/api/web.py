@@ -25,6 +25,7 @@ NO_CACHE_HEADERS = {
 from pika.config import Settings, get_settings
 from pika.services.app_config import get_app_config
 from pika.services.audit import get_audit_logger
+from pika.services.auth import AuthService, get_auth_service
 from pika.services.documents import DocumentInfo, DocumentProcessor, get_document_processor
 
 # Rate limiter for auth endpoints
@@ -150,73 +151,80 @@ def validate_csrf_token(token: str | None, session_id: str | None = None) -> boo
 
 def is_setup_required() -> bool:
     """Check if initial setup is required."""
-    settings = get_settings()
-    config = get_app_config()
-    # Setup is required if no env password AND no stored credentials
-    return settings.pika_admin_password is None and not config.is_setup_complete()
+    auth = get_auth_service()
+    # Setup is required if no users exist
+    return not auth.is_setup_complete()
 
 
 def is_admin_auth_required() -> bool:
     """Check if admin authentication is required."""
-    settings = get_settings()
-    config = get_app_config()
-    # Auth required if env password set OR stored credentials exist
-    return settings.pika_admin_password is not None or config.is_setup_complete()
+    auth = get_auth_service()
+    # Auth required if any users exist
+    return auth.is_setup_complete()
 
 
 def is_authenticated(request: Request) -> bool:
-    """Check if the request is authenticated for admin access."""
+    """Check if the request is authenticated."""
     if not is_admin_auth_required():
         return True
     session_id = request.cookies.get("pika_session")
-    return session_id is not None and get_session(session_id) is not None
+    if not session_id:
+        return False
+    session = get_session(session_id)
+    if not session:
+        return False
+    # Verify user still exists and is active in DB
+    auth = get_auth_service()
+    user = auth.get_user_by_username(session.get("username", ""))
+    if not user or not user.get("is_active"):
+        # Session is stale, delete it
+        delete_session(session_id)
+        return False
+    return True
+
+
+def get_current_user(request: Request) -> dict | None:
+    """Get the current user from session."""
+    session_id = request.cookies.get("pika_session")
+    if not session_id:
+        return None
+    session = get_session(session_id)
+    if not session:
+        return None
+    return {
+        "username": session.get("username"),
+        "role": session.get("role"),
+    }
+
+
+def is_admin(request: Request) -> bool:
+    """Check if current user is an admin."""
+    user = get_current_user(request)
+    return user is not None and user.get("role") == "admin"
 
 
 def verify_password(username: str, password: str) -> dict | None:
-    """Verify username/password against env var or stored credentials.
+    """Verify username/password using the AuthService.
 
     Supports auto-upgrade of legacy SHA-256 hashes to bcrypt on successful login.
     """
-    settings = get_settings()
-    config = get_app_config()
+    auth = get_auth_service()
+    return auth.login(username, password)
 
-    # Check env var first (plaintext comparison for env-based auth)
-    if settings.pika_admin_password:
-        if secrets.compare_digest(password, settings.pika_admin_password):
-            return {"username": username, "role": "admin"}
-        return None
 
-    # Check stored admin credentials
-    creds = config.get_admin_credentials()
-    if creds and secrets.compare_digest(username, creds.get("username", "")):
-        stored_hash = creds.get("password_hash", "")
-        if verify_hashed_password(password, stored_hash):
-            # Auto-upgrade legacy SHA-256 to bcrypt
-            if not stored_hash.startswith(("$2b$", "$2a$", "$2y$")):
-                new_hash = hash_password(password)
-                config.set_admin_credentials(username, new_hash)
-                logger.info(f"Upgraded password hash for admin user: {username}")
-            return {"username": username, "role": "admin"}
-
-    # Check user list
-    for user in config.get_users():
-        if secrets.compare_digest(username, user.get("username", "")):
-            stored_hash = user.get("password_hash", "")
-            if verify_hashed_password(password, stored_hash):
-                # Auto-upgrade legacy SHA-256 to bcrypt
-                if not stored_hash.startswith(("$2b$", "$2a$", "$2y$")):
-                    new_hash = hash_password(password)
-                    config.update_user_password(username, new_hash)
-                    logger.info(f"Upgraded password hash for user: {username}")
-                return {"username": username, "role": user.get("role", "user")}
-
-    return None
+def require_user_auth(request: Request) -> bool:
+    """Dependency to require any authenticated user."""
+    if not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return True
 
 
 def require_admin_auth(request: Request) -> bool:
     """Dependency to require admin authentication."""
     if not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Authentication required")
+    if not is_admin(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
     return True
 
 
@@ -256,7 +264,12 @@ async def index(request: Request):
         return RedirectResponse(url="/setup", status_code=302)
     if is_admin_auth_required() and not is_authenticated(request):
         return RedirectResponse(url="/admin/login", status_code=302)
-    response = templates.TemplateResponse("index.html", {"request": request})
+    user = get_current_user(request)
+    response = templates.TemplateResponse("index.html", {
+        "request": request,
+        "user": user,
+        "is_admin": user and user.get("role") == "admin",
+    })
     # Prevent browser from caching authenticated pages
     for header, value in NO_CACHE_HEADERS.items():
         response.headers[header] = value
@@ -271,6 +284,9 @@ async def admin(request: Request):
         return RedirectResponse(url="/setup", status_code=302)
     if is_admin_auth_required() and not is_authenticated(request):
         return RedirectResponse(url="/admin/login", status_code=302)
+    # Only allow admin users to access the admin page
+    if is_admin_auth_required() and not is_admin(request):
+        return RedirectResponse(url="/", status_code=302)
     response = templates.TemplateResponse("admin.html", {
         "request": request,
         "auth_enabled": is_admin_auth_required(),
@@ -349,7 +365,7 @@ async def admin_login(
 
         audit.log_auth("login", success=True, ip_address=client_ip)
 
-        response = RedirectResponse(url="/admin", status_code=302)
+        response = RedirectResponse(url="/", status_code=302)
         response.set_cookie(
             key="pika_session",
             value=session_id,
@@ -433,16 +449,27 @@ async def setup_submit(
             status_code=400,
         )
 
-    # Store credentials
-    config = get_app_config()
-    password_hash = hash_password(password)
-    config.set_admin_credentials(username, password_hash)
+    # Create admin user
+    auth = get_auth_service()
+    try:
+        auth.create_user(username, password, "admin")
+    except ValueError as e:
+        new_csrf = generate_csrf_token()
+        return templates.TemplateResponse(
+            "setup.html",
+            {"request": request, "error": str(e), "username": username, "csrf_token": new_csrf},
+            status_code=400,
+        )
 
     # Generate API key if requested
+    config = get_app_config()
     api_key = None
     if generate_api_key:
         api_key = secrets.token_urlsafe(32)
         config.set_api_key(api_key)
+
+    # Mark setup as complete in config (for backwards compatibility)
+    config.set("setup_complete", True)
 
     # Log the setup
     audit = get_audit_logger()
@@ -454,7 +481,7 @@ async def setup_submit(
         "role": "admin",
     })
 
-    response = RedirectResponse(url="/admin", status_code=302)
+    response = RedirectResponse(url="/", status_code=302)
     response.set_cookie(
         key="pika_session",
         value=session_id,
@@ -574,6 +601,8 @@ async def admin_logs_page(request: Request):
     """Serve the audit logs page."""
     if is_admin_auth_required() and not is_authenticated(request):
         return RedirectResponse(url="/admin/login", status_code=302)
+    if is_admin_auth_required() and not is_admin(request):
+        return RedirectResponse(url="/", status_code=302)
 
     audit = get_audit_logger()
     logs = audit.get_recent_logs(100)
@@ -602,6 +631,8 @@ async def download_backup(
 
     if is_admin_auth_required() and not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Authentication required")
+    if is_admin_auth_required() and not is_admin(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
 
     data_dir = Path(settings.chroma_persist_dir).parent
     docs_dir = Path(settings.documents_dir)
@@ -690,6 +721,8 @@ async def restore_backup(
 
     if is_admin_auth_required() and not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Authentication required")
+    if is_admin_auth_required() and not is_admin(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
 
     if not file.filename or not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="File must be a .zip archive")

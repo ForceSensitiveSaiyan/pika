@@ -4,6 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}PIKA{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%234A90D9'/><text x='16' y='24' font-family='system-ui,sans-serif' font-size='22' font-weight='bold' fill='white' text-anchor='middle'>P</text></svg>">
+    <script>
+        // Initialize theme immediately to prevent flash
+        (function() {
+            const saved = localStorage.getItem('pika_theme');
+            if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
     <link rel="stylesheet" href="/static/style.css">
     {% block head %}{% endblock %}
 </head>

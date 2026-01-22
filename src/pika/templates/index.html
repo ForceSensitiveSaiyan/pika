@@ -16,6 +16,23 @@
             </svg>
             History
         </button>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+            <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+            </svg>
+            <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+        </button>
+        {% if is_admin %}
         <a href="/admin" class="header-link">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="12" cy="12" r="3"></circle>
@@ -23,6 +40,17 @@
             </svg>
             Admin
         </a>
+        {% endif %}
+        {% if user %}
+        <a href="/admin/logout" class="header-link">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                <polyline points="16 17 21 12 16 7"></polyline>
+                <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+            Logout
+        </a>
+        {% endif %}
     </div>
 </header>
 
@@ -42,6 +70,7 @@
     </div>
 </div>
 
+{% if is_admin %}
 <div class="onboarding-banner hidden" id="onboarding-banner">
     <div class="onboarding-banner-content">
         <span class="onboarding-banner-eyebrow">Get started</span>
@@ -55,6 +84,7 @@
         <a class="btn btn-primary" href="/admin">Open Admin</a>
     </div>
 </div>
+{% endif %}
 
 <!-- Chat Layout -->
 <div class="chat-layout">
@@ -65,7 +95,11 @@
             </svg>
             <h1 class="welcome-title">Ask anything about your documents</h1>
             <p class="welcome-text">
+                {% if is_admin %}
                 Upload and index documents in the <a href="/admin">Admin</a> section, then ask questions here.
+                {% else %}
+                Ask questions about the documents that have been indexed.
+                {% endif %}
             </p>
         </div>
     </div>
@@ -95,6 +129,18 @@
 
 {% block scripts %}
 <script>
+    const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+    const CURRENT_USER = '{{ user.username if user else '' }}';
+
+    // Theme toggle
+    function toggleTheme() {
+        const html = document.documentElement;
+        const current = html.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        html.setAttribute('data-theme', next);
+        localStorage.setItem('pika_theme', next);
+    }
+
     let isLoading = false;
     let messageCounter = 0;
     let chatHistory = []; // {type, content, result?, queryId?}
@@ -102,6 +148,11 @@
     let currentLoadingId = null;
     let currentQueryId = null;
     let historyVisible = false;
+
+    // Get user-specific storage key
+    function getChatHistoryKey() {
+        return CURRENT_USER ? `pika_chat_history_${CURRENT_USER}` : 'pika_chat_history';
+    }
 
     // Restore chat history on page load
     document.addEventListener('DOMContentLoaded', () => {
@@ -112,11 +163,11 @@
     });
 
     function saveChatHistory() {
-        sessionStorage.setItem('pika_chat_history', JSON.stringify(chatHistory));
+        sessionStorage.setItem(getChatHistoryKey(), JSON.stringify(chatHistory));
     }
 
     function restoreChatHistory() {
-        const saved = sessionStorage.getItem('pika_chat_history');
+        const saved = sessionStorage.getItem(getChatHistoryKey());
         if (!saved) return;
 
         try {
@@ -515,7 +566,7 @@
         // Check if this is a "no results" response
         const isNoResults = result.confidence === 'none';
         let noResultsHint = '';
-        if (isNoResults) {
+        if (isNoResults && IS_ADMIN) {
             noResultsHint = `
                 <div class="no-results-hint">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -524,6 +575,17 @@
                         <line x1="12" y1="8" x2="12.01" y2="8"></line>
                     </svg>
                     Try checking if your documents are indexed in <a href="/admin">Admin</a>
+                </div>
+            `;
+        } else if (isNoResults) {
+            noResultsHint = `
+                <div class="no-results-hint">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    No relevant information found in the indexed documents.
                 </div>
             `;
         }
