@@ -24,9 +24,8 @@ services:
     volumes:
       - ollama_models:/root/.ollama
     environment:
-      # Use model's native context length instead of Ollama's 4096 default
-      # This prevents issues with smaller models like TinyLlama (2048 max)
-      - OLLAMA_CONTEXT_LENGTH=2048
+      # Context length for generation (llama3.2 supports up to 128k)
+      - OLLAMA_CONTEXT_LENGTH=4096
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
@@ -57,7 +56,7 @@ services:
     environment:
       - DEBUG=true  # Set to false if using HTTPS
       - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_MODEL=llama3.1:8b
+      - OLLAMA_MODEL=llama3.2:3b
       - OLLAMA_TIMEOUT=300
       - DOCUMENTS_DIR=/app/documents
       - CHROMA_PERSIST_DIR=/app/data/chroma
