@@ -174,10 +174,14 @@ __all__ = [
 
 
 def _make_timeout(seconds: int) -> httpx.Timeout:
-    """Create httpx timeout with extended read timeout for LLM generation."""
+    """Create httpx timeout with extended read timeout for LLM generation.
+
+    Note: We add 30s buffer to the read timeout so the application-level
+    timeout (asyncio.wait_for) triggers first, giving cleaner error handling.
+    """
     return httpx.Timeout(
         connect=10.0,
-        read=float(seconds),
+        read=float(seconds) + 30.0,  # Buffer to let app timeout trigger first
         write=10.0,
         pool=10.0,
     )
