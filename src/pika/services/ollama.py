@@ -279,6 +279,8 @@ class OllamaClient:
         max_retries: int = 3,
     ) -> str:
         """Generate a completion from Ollama with retry logic."""
+        import time as time_module
+
         model = model or self.model
         payload = {
             "model": model,
@@ -291,38 +293,81 @@ class OllamaClient:
         timeout = _make_timeout(self.timeout)
         prompt_len = len(prompt)
         system_len = len(system) if system else 0
-        logger.info(f"Calling Ollama generate with timeout={self.timeout}s, prompt_len={prompt_len}, system_len={system_len}")
-        logger.debug(f"Ollama payload: model={model}, prompt={prompt[:200]}..., system={system[:100] if system else None}...")
+        start_time = time_module.time()
+        logger.info(f"[OLLAMA] Starting generate: timeout={self.timeout}s, prompt_len={prompt_len}, system_len={system_len}, model={model}")
 
         async def make_request():
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    f"{self.base_url}/api/generate",
-                    json=payload,
-                )
-                # Log non-200 responses for debugging
-                if response.status_code != 200:
-                    logger.error(f"Ollama returned {response.status_code}: {response.text[:500]}")
-                # Handle specific HTTP errors
-                if response.status_code == 404:
-                    raise OllamaModelNotFoundError(model)
-                response.raise_for_status()
-                return response.json().get("response", "")
+            request_start = time_module.time()
+            logger.info(f"[OLLAMA] Creating httpx client...")
+
+            # Use explicit limits to avoid connection pool issues
+            limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
+
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                limits=limits,
+                # Disable HTTP/2 which can have issues with long-running requests
+                http2=False,
+            ) as client:
+                logger.info(f"[OLLAMA] Sending POST to {self.base_url}/api/generate...")
+                try:
+                    response = await client.post(
+                        f"{self.base_url}/api/generate",
+                        json=payload,
+                    )
+                    elapsed = time_module.time() - request_start
+                    logger.info(f"[OLLAMA] Response received: status={response.status_code}, elapsed={elapsed:.1f}s")
+
+                    # Log non-200 responses for debugging
+                    if response.status_code != 200:
+                        logger.error(f"[OLLAMA] Error response {response.status_code}: {response.text[:500]}")
+                    # Handle specific HTTP errors
+                    if response.status_code == 404:
+                        raise OllamaModelNotFoundError(model)
+                    response.raise_for_status()
+                    return response.json().get("response", "")
+                except httpx.ReadTimeout as e:
+                    elapsed = time_module.time() - request_start
+                    logger.error(f"[OLLAMA] ReadTimeout after {elapsed:.1f}s: {e}")
+                    raise
+                except httpx.ConnectError as e:
+                    elapsed = time_module.time() - request_start
+                    logger.error(f"[OLLAMA] ConnectError after {elapsed:.1f}s: {e}")
+                    raise
+                except Exception as e:
+                    elapsed = time_module.time() - request_start
+                    logger.error(f"[OLLAMA] Unexpected error after {elapsed:.1f}s: {type(e).__name__}: {e}")
+                    raise
 
         try:
-            return await retry_with_backoff(
+            result = await retry_with_backoff(
                 make_request,
                 max_retries=max_retries,
                 retryable_exceptions=(httpx.ConnectError, httpx.ConnectTimeout),
             )
+            total_elapsed = time_module.time() - start_time
+            logger.info(f"[OLLAMA] Generate completed successfully in {total_elapsed:.1f}s")
+            return result
         except httpx.ReadTimeout:
+            total_elapsed = time_module.time() - start_time
+            logger.error(f"[OLLAMA] Final timeout after {total_elapsed:.1f}s")
             raise OllamaTimeoutError(
                 f"Request timed out after {self.timeout}s. "
                 "Try a shorter prompt or increase OLLAMA_TIMEOUT."
             )
         except httpx.HTTPStatusError as e:
+            total_elapsed = time_module.time() - start_time
+            logger.error(f"[OLLAMA] HTTP error after {total_elapsed:.1f}s: {e.response.status_code}")
             if e.response.status_code == 404:
                 raise OllamaModelNotFoundError(model)
+            raise
+        except asyncio.CancelledError:
+            total_elapsed = time_module.time() - start_time
+            logger.warning(f"[OLLAMA] Request cancelled after {total_elapsed:.1f}s")
+            raise
+        except Exception as e:
+            total_elapsed = time_module.time() - start_time
+            logger.error(f"[OLLAMA] Unexpected failure after {total_elapsed:.1f}s: {type(e).__name__}: {e}")
             raise
 
     async def generate_stream(

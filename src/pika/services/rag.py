@@ -309,6 +309,10 @@ class RAGEngine:
         top_k: int | None = None,
     ) -> QueryResult:
         """Query the RAG system with a question."""
+        import time as time_module
+        query_start = time_module.time()
+        logger.info(f"[RAG.query] Starting query: '{question[:50]}...'")
+
         top_k = top_k or self.settings.top_k
 
         # Check if index has documents
@@ -325,14 +329,20 @@ class RAGEngine:
             )
 
         # Generate embedding for question
+        embed_start = time_module.time()
         question_embedding = self._embed([question])[0]
+        embed_elapsed = time_module.time() - embed_start
+        logger.info(f"[RAG.query] Embedding generated in {embed_elapsed:.2f}s")
 
         # Query ChromaDB
+        chroma_start = time_module.time()
         results = self.collection.query(
             query_embeddings=[question_embedding],
             n_results=top_k,
             include=["documents", "metadatas", "distances"],
         )
+        chroma_elapsed = time_module.time() - chroma_start
+        logger.info(f"[RAG.query] ChromaDB query completed in {chroma_elapsed:.2f}s")
 
         # Convert distances to similarities (cosine distance to similarity)
         distances = results["distances"][0]
@@ -391,10 +401,15 @@ Question: {question}
 Answer based on the context above:"""
 
             try:
+                ollama_start = time_module.time()
+                logger.info(f"[RAG.query] Calling Ollama generate (prompt_len={len(prompt)}, system_len={len(system_prompt)})")
                 answer = await self.ollama_client.generate(
                     prompt=prompt,
                     system=system_prompt,
                 )
+                ollama_elapsed = time_module.time() - ollama_start
+                total_elapsed = time_module.time() - query_start
+                logger.info(f"[RAG.query] Ollama completed in {ollama_elapsed:.1f}s, total query time: {total_elapsed:.1f}s")
             except OllamaConnectionError:
                 return QueryResult(
                     answer=(
@@ -489,6 +504,10 @@ async def start_query_task(
     _set_query_status(query_status, username)
 
     async def run_query():
+        import time as time_module
+        query_start = time_module.time()
+        logger.info(f"[RAG] Starting query {query_id}: '{question[:50]}...' with timeout={QUERY_TIMEOUT}s")
+
         try:
             rag = get_rag_engine()
             # Add timeout to prevent queries from running forever
@@ -498,7 +517,8 @@ async def start_query_task(
             )
             query_status.result = result
             query_status.status = "completed"
-            logger.info(f"Query completed: {query_id}")
+            elapsed = time_module.time() - query_start
+            logger.info(f"[RAG] Query completed: {query_id} in {elapsed:.1f}s")
 
             # Audit log
             audit = get_audit_logger()
@@ -520,13 +540,15 @@ async def start_query_task(
             )
         except asyncio.CancelledError:
             # Query was cancelled by user
+            elapsed = time_module.time() - query_start
             query_status.status = "cancelled"
             query_status.error = "Query was cancelled"
-            logger.info(f"Query cancelled: {query_id}")
+            logger.info(f"[RAG] Query cancelled: {query_id} after {elapsed:.1f}s")
         except asyncio.TimeoutError:
+            elapsed = time_module.time() - query_start
             query_status.status = "error"
             query_status.error = f"Query timed out after {QUERY_TIMEOUT} seconds"
-            logger.error(f"Query timed out: {query_id}")
+            logger.error(f"[RAG] Query timed out: {query_id} after {elapsed:.1f}s (limit was {QUERY_TIMEOUT}s)")
 
             # Audit log timeout
             audit = get_audit_logger()
@@ -538,9 +560,10 @@ async def start_query_task(
                 error="Query timed out",
             )
         except Exception as e:
+            elapsed = time_module.time() - query_start
             query_status.error = str(e)
             query_status.status = "error"
-            logger.error(f"Query failed: {query_id} - {e}")
+            logger.error(f"[RAG] Query failed: {query_id} after {elapsed:.1f}s - {type(e).__name__}: {e}")
 
             # Audit log error
             audit = get_audit_logger()
