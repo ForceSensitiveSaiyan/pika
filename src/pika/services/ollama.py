@@ -296,6 +296,7 @@ class OllamaClient:
         prompt_len = len(prompt)
         system_len = len(system) if system else 0
         logger.info(f"Calling Ollama generate with timeout={self.timeout}s, prompt_len={prompt_len}, system_len={system_len}")
+        logger.debug(f"Ollama payload: model={model}, prompt={prompt[:200]}..., system={system[:100] if system else None}...")
 
         async def make_request():
             async with httpx.AsyncClient(timeout=timeout) as client:
