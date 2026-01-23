@@ -303,7 +303,7 @@ class OllamaClient:
 
         async def make_request():
             request_start = time_module.time()
-            logger.info(f"[OLLAMA] Creating httpx client for streaming request...")
+            logger.info(f"[OLLAMA] Creating httpx client...")
 
             # Use explicit limits to avoid connection pool issues
             limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
@@ -311,7 +311,6 @@ class OllamaClient:
             # Explicit headers to match curl behavior
             headers = {
                 "Content-Type": "application/json",
-                "Accept": "application/x-ndjson",
             }
 
             async with httpx.AsyncClient(
@@ -319,36 +318,32 @@ class OllamaClient:
                 limits=limits,
                 http2=False,
             ) as client:
-                # Manually encode JSON to ensure consistent formatting
-                json_body = json.dumps(payload)
-                logger.info(f"[OLLAMA] Sending streaming POST to {self.base_url}/api/generate (body_len={len(json_body)})...")
+                logger.info(f"[OLLAMA] Sending POST to {self.base_url}/api/generate...")
                 try:
-                    # Use streaming to collect response chunks
-                    response_chunks = []
-                    async with client.stream(
-                        "POST",
+                    # Use regular POST (non-streaming) - streaming mode has issues on Docker/macOS
+                    response = await client.post(
                         f"{self.base_url}/api/generate",
-                        content=json_body,
+                        json=payload,
                         headers=headers,
-                    ) as response:
-                        logger.info(f"[OLLAMA] Response stream opened, status={response.status_code}")
-                        first_chunk_time = None
-                        async for line in response.aiter_lines():
-                            if line:
-                                if first_chunk_time is None:
-                                    first_chunk_time = time_module.time() - request_start
-                                    logger.info(f"[OLLAMA] First chunk received after {first_chunk_time:.1f}s")
-                                data = json.loads(line)
-                                if "response" in data:
-                                    response_chunks.append(data["response"])
-                                # Check for completion
-                                if data.get("done", False):
-                                    break
-
+                    )
                     elapsed = time_module.time() - request_start
-                    full_response = "".join(response_chunks)
-                    logger.info(f"[OLLAMA] Streaming complete: {len(full_response)} chars in {elapsed:.1f}s")
-                    return full_response
+                    logger.info(f"[OLLAMA] Response received: status={response.status_code}, elapsed={elapsed:.1f}s")
+
+                    if response.status_code != 200:
+                        logger.error(f"[OLLAMA] Error response: {response.text[:500]}")
+                    if response.status_code == 404:
+                        raise OllamaModelNotFoundError(model)
+                    response.raise_for_status()
+
+                    # Parse the response - with stream:true, response is newline-delimited JSON
+                    full_response = []
+                    for line in response.text.strip().split('\n'):
+                        if line:
+                            data = json.loads(line)
+                            if "response" in data:
+                                full_response.append(data["response"])
+
+                    return "".join(full_response)
 
                 except httpx.ReadTimeout as e:
                     elapsed = time_module.time() - request_start
@@ -370,7 +365,7 @@ class OllamaClient:
                 retryable_exceptions=(httpx.ConnectError, httpx.ConnectTimeout),
             )
             total_elapsed = time_module.time() - start_time
-            logger.info(f"[OLLAMA] Generate completed successfully in {total_elapsed:.1f}s")
+            logger.info(f"[OLLAMA] Generate completed in {total_elapsed:.1f}s")
             return result
         except httpx.ReadTimeout:
             total_elapsed = time_module.time() - start_time
