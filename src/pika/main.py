@@ -27,7 +27,14 @@ logging.basicConfig(
     level=log_level,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
+    force=True,  # Override any existing logging config
 )
+
+# Explicitly set log level for pika modules to ensure they're visible
+logging.getLogger("pika").setLevel(log_level)
+logging.getLogger("pika.services.rag").setLevel(log_level)
+logging.getLogger("pika.services.ollama").setLevel(log_level)
+
 logger = logging.getLogger(__name__)
 
 # Static files directory

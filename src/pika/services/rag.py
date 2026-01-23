@@ -176,10 +176,10 @@ class RAGEngine:
         if self._embedding_model is None:
             import time as time_module
             load_start = time_module.time()
-            logger.warning(f"[RAG] Loading embedding model: {self.settings.embedding_model}...")
+            logger.info(f"[RAG] Loading embedding model: {self.settings.embedding_model}...")
             self._embedding_model = SentenceTransformer(self.settings.embedding_model)
             load_elapsed = time_module.time() - load_start
-            logger.warning(f"[RAG] Embedding model loaded in {load_elapsed:.1f}s")
+            logger.info(f"[RAG] Embedding model loaded in {load_elapsed:.1f}s")
         return self._embedding_model
 
     @property
@@ -316,7 +316,7 @@ class RAGEngine:
         """Query the RAG system with a question."""
         import time as time_module
         query_start = time_module.time()
-        logger.warning(f"[RAG.query] Starting query: '{question[:50]}...'")
+        logger.info(f"[RAG.query] Starting query: '{question[:50]}...'")
 
         top_k = top_k or self.settings.top_k
 
@@ -337,7 +337,7 @@ class RAGEngine:
         embed_start = time_module.time()
         question_embedding = self._embed([question])[0]
         embed_elapsed = time_module.time() - embed_start
-        logger.warning(f"[RAG.query] Embedding generated in {embed_elapsed:.2f}s")
+        logger.info(f"[RAG.query] Embedding generated in {embed_elapsed:.2f}s")
 
         # Query ChromaDB
         chroma_start = time_module.time()
@@ -347,7 +347,7 @@ class RAGEngine:
             include=["documents", "metadatas", "distances"],
         )
         chroma_elapsed = time_module.time() - chroma_start
-        logger.warning(f"[RAG.query] ChromaDB query completed in {chroma_elapsed:.2f}s")
+        logger.info(f"[RAG.query] ChromaDB query completed in {chroma_elapsed:.2f}s")
 
         # Convert distances to similarities (cosine distance to similarity)
         distances = results["distances"][0]
@@ -407,14 +407,14 @@ Answer based on the context above:"""
 
             try:
                 ollama_start = time_module.time()
-                logger.warning(f"[RAG.query] Calling Ollama generate (prompt_len={len(prompt)}, system_len={len(system_prompt)})")
+                logger.info(f"[RAG.query] Calling Ollama generate (prompt_len={len(prompt)}, system_len={len(system_prompt)})")
                 answer = await self.ollama_client.generate(
                     prompt=prompt,
                     system=system_prompt,
                 )
                 ollama_elapsed = time_module.time() - ollama_start
                 total_elapsed = time_module.time() - query_start
-                logger.warning(f"[RAG.query] Ollama completed in {ollama_elapsed:.1f}s, total query time: {total_elapsed:.1f}s")
+                logger.info(f"[RAG.query] Ollama completed in {ollama_elapsed:.1f}s, total query time: {total_elapsed:.1f}s")
             except OllamaConnectionError:
                 return QueryResult(
                     answer=(
@@ -511,7 +511,7 @@ async def start_query_task(
     async def run_query():
         import time as time_module
         query_start = time_module.time()
-        logger.warning(f"[RAG] Starting query {query_id}: '{question[:50]}...' with timeout={QUERY_TIMEOUT}s")
+        logger.info(f"[RAG] Starting query {query_id}: '{question[:50]}...' with timeout={QUERY_TIMEOUT}s")
 
         try:
             rag = get_rag_engine()
@@ -523,7 +523,7 @@ async def start_query_task(
             query_status.result = result
             query_status.status = "completed"
             elapsed = time_module.time() - query_start
-            logger.warning(f"[RAG] Query completed: {query_id} in {elapsed:.1f}s")
+            logger.info(f"[RAG] Query completed: {query_id} in {elapsed:.1f}s")
 
             # Audit log
             audit = get_audit_logger()
@@ -548,7 +548,7 @@ async def start_query_task(
             elapsed = time_module.time() - query_start
             query_status.status = "cancelled"
             query_status.error = "Query was cancelled"
-            logger.warning(f"[RAG] Query cancelled: {query_id} after {elapsed:.1f}s")
+            logger.info(f"[RAG] Query cancelled: {query_id} after {elapsed:.1f}s")
         except asyncio.TimeoutError:
             elapsed = time_module.time() - query_start
             query_status.status = "error"
