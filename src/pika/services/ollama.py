@@ -299,6 +299,9 @@ class OllamaClient:
                     f"{self.base_url}/api/generate",
                     json=payload,
                 )
+                # Log non-200 responses for debugging
+                if response.status_code != 200:
+                    logger.error(f"Ollama returned {response.status_code}: {response.text[:500]}")
                 # Handle specific HTTP errors
                 if response.status_code == 404:
                     raise OllamaModelNotFoundError(model)
