@@ -23,6 +23,10 @@ services:
       - "11434:11434"
     volumes:
       - ollama_models:/root/.ollama
+    environment:
+      # Use model's native context length instead of Ollama's 4096 default
+      # This prevents issues with smaller models like TinyLlama (2048 max)
+      - OLLAMA_CONTEXT_LENGTH=2048
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
