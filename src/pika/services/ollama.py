@@ -302,56 +302,48 @@ class OllamaClient:
         logger.info(f"[OLLAMA] Starting generate: timeout={self.timeout}s, prompt_len={prompt_len}, system_len={system_len}, model={model}")
 
         async def make_request():
+            import aiohttp
+
             request_start = time_module.time()
-            logger.info(f"[OLLAMA] Creating httpx client...")
+            logger.info(f"[OLLAMA] Creating aiohttp client (trying different HTTP library)...")
 
-            # Use explicit limits to avoid connection pool issues
-            limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
+            # Use aiohttp instead of httpx - may handle Docker networking differently
+            aio_timeout = aiohttp.ClientTimeout(total=self.timeout, connect=10)
 
-            # Explicit headers to match curl behavior
-            headers = {
-                "Content-Type": "application/json",
-            }
-
-            async with httpx.AsyncClient(
-                timeout=timeout,
-                limits=limits,
-                http2=False,
-            ) as client:
-                logger.info(f"[OLLAMA] Sending POST to {self.base_url}/api/generate...")
+            async with aiohttp.ClientSession(timeout=aio_timeout) as session:
+                logger.info(f"[OLLAMA] Sending POST via aiohttp to {self.base_url}/api/generate...")
                 try:
-                    # Use regular POST (non-streaming) - streaming mode has issues on Docker/macOS
-                    response = await client.post(
+                    async with session.post(
                         f"{self.base_url}/api/generate",
                         json=payload,
-                        headers=headers,
-                    )
+                    ) as response:
+                        elapsed_to_headers = time_module.time() - request_start
+                        logger.info(f"[OLLAMA] Got response headers: status={response.status}, elapsed={elapsed_to_headers:.1f}s")
+
+                        if response.status == 404:
+                            raise OllamaModelNotFoundError(model)
+                        if response.status != 200:
+                            error_text = await response.text()
+                            logger.error(f"[OLLAMA] Error response: {error_text[:500]}")
+                            raise Exception(f"Ollama returned {response.status}: {error_text[:200]}")
+
+                        # Read and parse the streaming response
+                        full_response = []
+                        async for line in response.content:
+                            line_text = line.decode('utf-8').strip()
+                            if line_text:
+                                data = json.loads(line_text)
+                                if "response" in data:
+                                    full_response.append(data["response"])
+
+                        elapsed = time_module.time() - request_start
+                        result = "".join(full_response)
+                        logger.info(f"[OLLAMA] Response complete: {len(result)} chars in {elapsed:.1f}s")
+                        return result
+
+                except aiohttp.ClientError as e:
                     elapsed = time_module.time() - request_start
-                    logger.info(f"[OLLAMA] Response received: status={response.status_code}, elapsed={elapsed:.1f}s")
-
-                    if response.status_code != 200:
-                        logger.error(f"[OLLAMA] Error response: {response.text[:500]}")
-                    if response.status_code == 404:
-                        raise OllamaModelNotFoundError(model)
-                    response.raise_for_status()
-
-                    # Parse the response - with stream:true, response is newline-delimited JSON
-                    full_response = []
-                    for line in response.text.strip().split('\n'):
-                        if line:
-                            data = json.loads(line)
-                            if "response" in data:
-                                full_response.append(data["response"])
-
-                    return "".join(full_response)
-
-                except httpx.ReadTimeout as e:
-                    elapsed = time_module.time() - request_start
-                    logger.error(f"[OLLAMA] ReadTimeout after {elapsed:.1f}s: {e}")
-                    raise
-                except httpx.ConnectError as e:
-                    elapsed = time_module.time() - request_start
-                    logger.error(f"[OLLAMA] ConnectError after {elapsed:.1f}s: {e}")
+                    logger.error(f"[OLLAMA] aiohttp error after {elapsed:.1f}s: {type(e).__name__}: {e}")
                     raise
                 except Exception as e:
                     elapsed = time_module.time() - request_start
@@ -359,27 +351,22 @@ class OllamaClient:
                     raise
 
         try:
+            import aiohttp
             result = await retry_with_backoff(
                 make_request,
                 max_retries=max_retries,
-                retryable_exceptions=(httpx.ConnectError, httpx.ConnectTimeout),
+                retryable_exceptions=(aiohttp.ClientConnectorError, asyncio.TimeoutError),
             )
             total_elapsed = time_module.time() - start_time
             logger.info(f"[OLLAMA] Generate completed in {total_elapsed:.1f}s")
             return result
-        except httpx.ReadTimeout:
+        except asyncio.TimeoutError:
             total_elapsed = time_module.time() - start_time
             logger.error(f"[OLLAMA] Final timeout after {total_elapsed:.1f}s")
             raise OllamaTimeoutError(
                 f"Request timed out after {self.timeout}s. "
                 "Try a shorter prompt or increase OLLAMA_TIMEOUT."
             )
-        except httpx.HTTPStatusError as e:
-            total_elapsed = time_module.time() - start_time
-            logger.error(f"[OLLAMA] HTTP error after {total_elapsed:.1f}s: {e.response.status_code}")
-            if e.response.status_code == 404:
-                raise OllamaModelNotFoundError(model)
-            raise
         except asyncio.CancelledError:
             total_elapsed = time_module.time() - start_time
             logger.info(f"[OLLAMA] Request cancelled after {total_elapsed:.1f}s")
