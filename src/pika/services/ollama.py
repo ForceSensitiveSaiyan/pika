@@ -308,20 +308,30 @@ class OllamaClient:
             # Use explicit limits to avoid connection pool issues
             limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
 
+            # Explicit headers to match curl behavior
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/x-ndjson",
+            }
+
             async with httpx.AsyncClient(
                 timeout=timeout,
                 limits=limits,
                 http2=False,
             ) as client:
-                logger.info(f"[OLLAMA] Sending streaming POST to {self.base_url}/api/generate...")
+                # Manually encode JSON to ensure consistent formatting
+                json_body = json.dumps(payload)
+                logger.info(f"[OLLAMA] Sending streaming POST to {self.base_url}/api/generate (body_len={len(json_body)})...")
                 try:
                     # Use streaming to collect response chunks
                     response_chunks = []
                     async with client.stream(
                         "POST",
                         f"{self.base_url}/api/generate",
-                        json=payload,
+                        content=json_body,
+                        headers=headers,
                     ) as response:
+                        logger.info(f"[OLLAMA] Response stream opened, status={response.status_code}")
                         first_chunk_time = None
                         async for line in response.aiter_lines():
                             if line:
