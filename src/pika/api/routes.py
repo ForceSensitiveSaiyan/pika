@@ -19,6 +19,7 @@ from pika.services.history import HistoryService, get_history_service
 from pika.services.ollama import (
     OllamaClient,
     _format_size,
+    cancel_pull_task,
     get_active_pull,
     get_ollama_client,
     is_pull_running,
@@ -319,6 +320,41 @@ async def get_pull_status() -> PullStatusResponse:
         total=pull.total,
         percent=pull.percent,
         error=pull.error,
+    )
+
+
+class CancelPullResponse(BaseModel):
+    """Response model for cancel pull."""
+
+    cancelled: bool
+    message: str
+
+
+@router.post("/models/pull/cancel", response_model=CancelPullResponse)
+async def cancel_pull(
+    _: bool = Depends(require_admin_or_api_auth),
+) -> CancelPullResponse:
+    """Cancel an active model pull."""
+    if not is_pull_running():
+        return CancelPullResponse(
+            cancelled=False,
+            message="No model pull is currently running",
+        )
+
+    cancelled = cancel_pull_task()
+    if cancelled:
+        # Audit log
+        audit = get_audit_logger()
+        pull = get_active_pull()
+        audit.log_admin_action("cancel_pull", {"model": pull.model if pull else "unknown"})
+
+        return CancelPullResponse(
+            cancelled=True,
+            message="Model pull cancelled",
+        )
+    return CancelPullResponse(
+        cancelled=False,
+        message="Failed to cancel model pull",
     )
 
 

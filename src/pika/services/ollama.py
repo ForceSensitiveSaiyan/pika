@@ -140,6 +140,30 @@ def is_pull_running() -> bool:
     return _pull_task is not None and not _pull_task.done()
 
 
+def cancel_pull_task() -> bool:
+    """Cancel the currently running pull task.
+
+    Returns True if a task was cancelled, False if no task was running.
+    """
+    global _pull_task, _active_pull
+
+    if _pull_task is None or _pull_task.done():
+        return False
+
+    _pull_task.cancel()
+
+    if _active_pull:
+        _active_pull.status = "cancelled"
+        _active_pull.error = "Download cancelled by user"
+
+    # Clear the active pull
+    _set_active_pull(None)
+    _pull_task = None
+
+    logger.info("Model pull cancelled by user")
+    return True
+
+
 async def start_pull_task(client: "OllamaClient", model_name: str) -> None:
     """Start a background pull task if not already running."""
     global _pull_task
@@ -169,6 +193,7 @@ __all__ = [
     "get_active_pull",
     "is_pull_running",
     "start_pull_task",
+    "cancel_pull_task",
     "_format_size",
 ]
 

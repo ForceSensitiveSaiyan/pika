@@ -81,9 +81,9 @@
                         <span class="current-model-label">Active Model</span>
                         <span class="current-model-name" id="current-model-name">Loading...</span>
                     </div>
-                    <span class="status-badge status-active">
+                    <span class="status-badge status-active" id="model-status-badge">
                         <span class="status-dot"></span>
-                        Running
+                        <span id="model-status-text">Running</span>
                     </span>
                 </div>
 
@@ -121,10 +121,13 @@
 
                 <!-- Pull Progress -->
                 <div class="progress-card" id="pull-progress">
+                    <div class="progress-header">
+                        <p class="progress-text" id="progress-text">Starting download...</p>
+                        <button class="btn btn-danger btn-sm" id="cancel-pull-btn" onclick="cancelPull()">Cancel</button>
+                    </div>
                     <div class="progress-bar">
                         <div class="progress-fill" id="progress-fill"></div>
                     </div>
-                    <p class="progress-text" id="progress-text">Starting download...</p>
                 </div>
             </div>
         </section>
@@ -349,6 +352,14 @@
         loadUsers();
         setupUpload();
         checkActivePull();
+
+        // Enter key to pull model
+        document.getElementById('model-name').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                pullModel();
+            }
+        });
     });
 
     // ==================== Models ====================
@@ -359,11 +370,15 @@
             const models = await response.json();
             const select = document.getElementById('model-select');
             const currentName = document.getElementById('current-model-name');
+            const statusBadge = document.getElementById('model-status-badge');
+            const statusText = document.getElementById('model-status-text');
 
             // Find current model
             const current = models.find(m => m.is_current);
             if (current) {
                 currentName.textContent = `${current.name} (${current.size})`;
+                statusBadge.className = 'status-badge status-active';
+                statusText.textContent = 'Running';
             }
 
             // Populate select
@@ -375,7 +390,9 @@
 
             if (models.length === 0) {
                 select.innerHTML = '<option value="">No models available</option>';
-                currentName.textContent = 'No model selected';
+                currentName.textContent = 'No model available';
+                statusBadge.className = 'status-badge status-inactive';
+                statusText.textContent = 'No Model';
             }
         } catch (error) {
             console.error('Failed to load models:', error);
@@ -492,6 +509,39 @@
         if (pullPollingInterval) {
             clearInterval(pullPollingInterval);
             pullPollingInterval = null;
+        }
+    }
+
+    async function cancelPull() {
+        const cancelBtn = document.getElementById('cancel-pull-btn');
+        cancelBtn.disabled = true;
+        cancelBtn.innerHTML = '<span class="spinner"></span>';
+
+        try {
+            const response = await fetch('/api/v1/models/pull/cancel', {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            stopPullPolling();
+
+            const btn = document.getElementById('pull-model-btn');
+            const progress = document.getElementById('pull-progress');
+
+            btn.disabled = false;
+            progress.classList.remove('visible');
+
+            if (result.cancelled) {
+                showToast('Download cancelled', 'info');
+            } else {
+                showToast(result.message || 'No active download to cancel', 'info');
+            }
+        } catch (error) {
+            showToast('Failed to cancel download', 'error');
+        } finally {
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel';
         }
     }
 

@@ -188,10 +188,20 @@
                     addMessage(msg.content, 'error');
                 }
             }
+
+            // Scroll to bottom after restoring history
+            scrollToBottom();
         } catch (e) {
             console.error('Failed to restore chat history:', e);
             chatHistory = [];
         }
+    }
+
+    function scrollToBottom() {
+        const container = document.getElementById('chat-messages');
+        container.scrollTop = container.scrollHeight;
+        // Also scroll the input into view
+        document.getElementById('question-input').scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
 
     // ==================== History Panel ====================
