@@ -303,20 +303,43 @@ class OllamaClient:
 
         async def make_request():
             import aiohttp
+            import socket
 
             request_start = time_module.time()
-            logger.info(f"[OLLAMA] Creating aiohttp client (trying different HTTP library)...")
 
-            # Use aiohttp instead of httpx - may handle Docker networking differently
-            aio_timeout = aiohttp.ClientTimeout(total=self.timeout, connect=10)
+            # Resolve hostname to IP to rule out DNS issues
+            try:
+                ollama_ip = socket.gethostbyname("ollama")
+                logger.info(f"[OLLAMA] Resolved 'ollama' to {ollama_ip}")
+            except socket.gaierror:
+                ollama_ip = None
+                logger.warning("[OLLAMA] Could not resolve 'ollama' hostname")
+
+            # Use shorter timeout for connection, longer for read
+            aio_timeout = aiohttp.ClientTimeout(
+                total=self.timeout,
+                connect=30,
+                sock_read=self.timeout
+            )
+
+            # Use the /api/chat endpoint instead of /api/generate
+            # Chat endpoint may have different handling
+            chat_payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system if system else "You are a helpful assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                "stream": True,
+            }
+
+            logger.info(f"[OLLAMA] Using /api/chat endpoint with model={model}")
 
             async with aiohttp.ClientSession(timeout=aio_timeout) as session:
-                logger.info(f"[OLLAMA] Sending POST via aiohttp to {self.base_url}/api/generate...")
+                url = f"{self.base_url}/api/chat"
+                logger.info(f"[OLLAMA] Sending POST to {url}...")
                 try:
-                    async with session.post(
-                        f"{self.base_url}/api/generate",
-                        json=payload,
-                    ) as response:
+                    async with session.post(url, json=chat_payload) as response:
                         elapsed_to_headers = time_module.time() - request_start
                         logger.info(f"[OLLAMA] Got response headers: status={response.status}, elapsed={elapsed_to_headers:.1f}s")
 
@@ -329,16 +352,21 @@ class OllamaClient:
 
                         # Read and parse the streaming response
                         full_response = []
+                        chunk_count = 0
                         async for line in response.content:
                             line_text = line.decode('utf-8').strip()
                             if line_text:
+                                chunk_count += 1
+                                if chunk_count == 1:
+                                    logger.info(f"[OLLAMA] First chunk received after {time_module.time() - request_start:.1f}s")
                                 data = json.loads(line_text)
-                                if "response" in data:
-                                    full_response.append(data["response"])
+                                # Chat endpoint returns content in message.content
+                                if "message" in data and "content" in data["message"]:
+                                    full_response.append(data["message"]["content"])
 
                         elapsed = time_module.time() - request_start
                         result = "".join(full_response)
-                        logger.info(f"[OLLAMA] Response complete: {len(result)} chars in {elapsed:.1f}s")
+                        logger.info(f"[OLLAMA] Response complete: {len(result)} chars, {chunk_count} chunks in {elapsed:.1f}s")
                         return result
 
                 except aiohttp.ClientError as e:
