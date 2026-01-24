@@ -304,61 +304,39 @@ class OllamaClient:
         def sync_request():
             """Synchronous request using requests library - runs in thread pool."""
             import requests as req_lib
-            import subprocess
 
             request_start = time_module.time()
-            logger.info(f"[OLLAMA] Using curl subprocess (bypassing Python HTTP)")
-
-            url = f"{self.base_url}/api/generate"
-
-            # Use curl subprocess instead of Python HTTP libraries
-            # This bypasses any Python-specific networking issues
-            import json as json_module
-            payload_json = json_module.dumps(payload)
-            logger.info(f"[OLLAMA] Sending curl POST to {url}, payload_len={len(payload_json)}")
+            logger.info(f"[OLLAMA] Sending request to {self.base_url}/api/generate")
 
             try:
-                result = subprocess.run(
-                    [
-                        "curl", "-s", "-X", "POST", url,
-                        "-H", "Content-Type: application/json",
-                        "-d", payload_json,
-                        "--max-time", str(self.timeout),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout + 10,  # Extra buffer for subprocess
+                response = req_lib.post(
+                    f"{self.base_url}/api/generate",
+                    json=payload,
+                    timeout=self.timeout,
                 )
-
                 elapsed = time_module.time() - request_start
-                logger.info(f"[OLLAMA] curl completed: returncode={result.returncode}, elapsed={elapsed:.1f}s")
+                logger.info(f"[OLLAMA] Response: status={response.status_code}, elapsed={elapsed:.1f}s")
 
-                if result.returncode != 0:
-                    logger.error(f"[OLLAMA] curl failed: stderr={result.stderr}")
-                    raise Exception(f"curl failed with code {result.returncode}: {result.stderr}")
+                if response.status_code == 404:
+                    raise OllamaModelNotFoundError(model)
+                response.raise_for_status()
 
-                if not result.stdout:
-                    logger.error(f"[OLLAMA] curl returned empty response")
-                    raise Exception("Empty response from Ollama")
+                data = response.json()
+                result = data.get("response", "")
+                logger.info(f"[OLLAMA] Complete: {len(result)} chars in {elapsed:.1f}s")
+                return result
 
-                # Parse the JSON response
-                data = json_module.loads(result.stdout)
-                response_text = data.get("response", "")
-                logger.info(f"[OLLAMA] Response complete: {len(response_text)} chars in {elapsed:.1f}s")
-                return response_text
-
-            except subprocess.TimeoutExpired:
+            except req_lib.Timeout as e:
                 elapsed = time_module.time() - request_start
-                logger.error(f"[OLLAMA] curl subprocess timeout after {elapsed:.1f}s")
-                raise Exception(f"Request timed out after {self.timeout}s")
-            except json_module.JSONDecodeError as e:
+                logger.error(f"[OLLAMA] Timeout after {elapsed:.1f}s: {e}")
+                raise
+            except req_lib.RequestException as e:
                 elapsed = time_module.time() - request_start
-                logger.error(f"[OLLAMA] Failed to parse response after {elapsed:.1f}s: {e}")
-                logger.error(f"[OLLAMA] Raw response: {result.stdout[:500] if result.stdout else 'empty'}")
+                logger.error(f"[OLLAMA] Request error after {elapsed:.1f}s: {type(e).__name__}: {e}")
                 raise
             except Exception as e:
                 elapsed = time_module.time() - request_start
-                logger.error(f"[OLLAMA] Unexpected error after {elapsed:.1f}s: {type(e).__name__}: {e}")
+                logger.error(f"[OLLAMA] Error after {elapsed:.1f}s: {type(e).__name__}: {e}")
                 raise
 
         async def make_request():
