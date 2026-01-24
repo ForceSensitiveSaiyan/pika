@@ -301,106 +301,86 @@ class OllamaClient:
         start_time = time_module.time()
         logger.info(f"[OLLAMA] Starting generate: timeout={self.timeout}s, prompt_len={prompt_len}, system_len={system_len}, model={model}")
 
-        async def make_request():
-            import aiohttp
-            import socket
+        def sync_request():
+            """Synchronous request using requests library - runs in thread pool."""
+            import requests as req_lib
 
             request_start = time_module.time()
+            logger.info(f"[OLLAMA] Using synchronous requests library (thread pool)")
 
-            # Resolve hostname to IP to rule out DNS issues
+            url = f"{self.base_url}/api/generate"
+            logger.info(f"[OLLAMA] Sending POST to {url}...")
+
             try:
-                ollama_ip = socket.gethostbyname("ollama")
-                logger.info(f"[OLLAMA] Resolved 'ollama' to {ollama_ip}")
-            except socket.gaierror:
-                ollama_ip = None
-                logger.warning("[OLLAMA] Could not resolve 'ollama' hostname")
+                response = req_lib.post(
+                    url,
+                    json=payload,
+                    timeout=self.timeout,
+                    stream=True,  # Stream to get chunks as they arrive
+                )
+                elapsed_to_headers = time_module.time() - request_start
+                logger.info(f"[OLLAMA] Got response: status={response.status_code}, elapsed={elapsed_to_headers:.1f}s")
 
-            # Use shorter timeout for connection, longer for read
-            aio_timeout = aiohttp.ClientTimeout(
-                total=self.timeout,
-                connect=30,
-                sock_read=self.timeout
-            )
+                if response.status_code == 404:
+                    raise OllamaModelNotFoundError(model)
+                response.raise_for_status()
 
-            # Use the /api/chat endpoint instead of /api/generate
-            # Chat endpoint may have different handling
-            chat_payload = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system if system else "You are a helpful assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                "stream": True,
-            }
+                # Read and parse the streaming response
+                full_response = []
+                chunk_count = 0
+                for line in response.iter_lines():
+                    if line:
+                        chunk_count += 1
+                        if chunk_count == 1:
+                            logger.info(f"[OLLAMA] First chunk received after {time_module.time() - request_start:.1f}s")
+                        data = json.loads(line)
+                        if "response" in data:
+                            full_response.append(data["response"])
 
-            logger.info(f"[OLLAMA] Using /api/chat endpoint with model={model}")
+                elapsed = time_module.time() - request_start
+                result = "".join(full_response)
+                logger.info(f"[OLLAMA] Response complete: {len(result)} chars, {chunk_count} chunks in {elapsed:.1f}s")
+                return result
 
-            async with aiohttp.ClientSession(timeout=aio_timeout) as session:
-                url = f"{self.base_url}/api/chat"
-                logger.info(f"[OLLAMA] Sending POST to {url}...")
-                try:
-                    async with session.post(url, json=chat_payload) as response:
-                        elapsed_to_headers = time_module.time() - request_start
-                        logger.info(f"[OLLAMA] Got response headers: status={response.status}, elapsed={elapsed_to_headers:.1f}s")
+            except req_lib.Timeout as e:
+                elapsed = time_module.time() - request_start
+                logger.error(f"[OLLAMA] Timeout after {elapsed:.1f}s: {e}")
+                raise
+            except req_lib.RequestException as e:
+                elapsed = time_module.time() - request_start
+                logger.error(f"[OLLAMA] Request error after {elapsed:.1f}s: {type(e).__name__}: {e}")
+                raise
+            except Exception as e:
+                elapsed = time_module.time() - request_start
+                logger.error(f"[OLLAMA] Unexpected error after {elapsed:.1f}s: {type(e).__name__}: {e}")
+                raise
 
-                        if response.status == 404:
-                            raise OllamaModelNotFoundError(model)
-                        if response.status != 200:
-                            error_text = await response.text()
-                            logger.error(f"[OLLAMA] Error response: {error_text[:500]}")
-                            raise Exception(f"Ollama returned {response.status}: {error_text[:200]}")
-
-                        # Read and parse the streaming response
-                        full_response = []
-                        chunk_count = 0
-                        async for line in response.content:
-                            line_text = line.decode('utf-8').strip()
-                            if line_text:
-                                chunk_count += 1
-                                if chunk_count == 1:
-                                    logger.info(f"[OLLAMA] First chunk received after {time_module.time() - request_start:.1f}s")
-                                data = json.loads(line_text)
-                                # Chat endpoint returns content in message.content
-                                if "message" in data and "content" in data["message"]:
-                                    full_response.append(data["message"]["content"])
-
-                        elapsed = time_module.time() - request_start
-                        result = "".join(full_response)
-                        logger.info(f"[OLLAMA] Response complete: {len(result)} chars, {chunk_count} chunks in {elapsed:.1f}s")
-                        return result
-
-                except aiohttp.ClientError as e:
-                    elapsed = time_module.time() - request_start
-                    logger.error(f"[OLLAMA] aiohttp error after {elapsed:.1f}s: {type(e).__name__}: {e}")
-                    raise
-                except Exception as e:
-                    elapsed = time_module.time() - request_start
-                    logger.error(f"[OLLAMA] Unexpected error after {elapsed:.1f}s: {type(e).__name__}: {e}")
-                    raise
+        async def make_request():
+            # Run synchronous request in thread pool to avoid async networking issues
+            return await asyncio.to_thread(sync_request)
 
         try:
-            import aiohttp
+            import requests as req_lib
             result = await retry_with_backoff(
                 make_request,
                 max_retries=max_retries,
-                retryable_exceptions=(aiohttp.ClientConnectorError, asyncio.TimeoutError),
+                retryable_exceptions=(req_lib.ConnectionError, req_lib.Timeout),
             )
             total_elapsed = time_module.time() - start_time
             logger.info(f"[OLLAMA] Generate completed in {total_elapsed:.1f}s")
             return result
-        except asyncio.TimeoutError:
-            total_elapsed = time_module.time() - start_time
-            logger.error(f"[OLLAMA] Final timeout after {total_elapsed:.1f}s")
-            raise OllamaTimeoutError(
-                f"Request timed out after {self.timeout}s. "
-                "Try a shorter prompt or increase OLLAMA_TIMEOUT."
-            )
         except asyncio.CancelledError:
             total_elapsed = time_module.time() - start_time
             logger.info(f"[OLLAMA] Request cancelled after {total_elapsed:.1f}s")
             raise
         except Exception as e:
             total_elapsed = time_module.time() - start_time
+            if "timeout" in str(e).lower() or "timed out" in str(e).lower():
+                logger.error(f"[OLLAMA] Timeout after {total_elapsed:.1f}s")
+                raise OllamaTimeoutError(
+                    f"Request timed out after {self.timeout}s. "
+                    "Try a shorter prompt or increase OLLAMA_TIMEOUT."
+                )
             logger.error(f"[OLLAMA] Unexpected failure after {total_elapsed:.1f}s: {type(e).__name__}: {e}")
             raise
 
