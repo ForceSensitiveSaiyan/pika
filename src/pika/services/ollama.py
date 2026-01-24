@@ -286,11 +286,11 @@ class OllamaClient:
         import time as time_module
 
         model = model or self.model
-        # Use streaming to avoid buffering issues with long responses
+        # Use non-streaming mode - streaming has issues with Docker networking on macOS
         payload = {
             "model": model,
             "prompt": prompt,
-            "stream": True,  # Stream to get incremental responses
+            "stream": False,  # Non-streaming works better in Docker
         }
         if system:
             payload["system"] = system
@@ -306,40 +306,29 @@ class OllamaClient:
             import requests as req_lib
 
             request_start = time_module.time()
-            logger.info(f"[OLLAMA] Using synchronous requests library (thread pool)")
+            logger.info(f"[OLLAMA] Using synchronous requests library (non-streaming mode)")
 
             url = f"{self.base_url}/api/generate"
             logger.info(f"[OLLAMA] Sending POST to {url}...")
 
             try:
+                # Non-streaming request - Ollama returns full response when done
                 response = req_lib.post(
                     url,
                     json=payload,
                     timeout=self.timeout,
-                    stream=True,  # Stream to get chunks as they arrive
                 )
-                elapsed_to_headers = time_module.time() - request_start
-                logger.info(f"[OLLAMA] Got response: status={response.status_code}, elapsed={elapsed_to_headers:.1f}s")
+                elapsed = time_module.time() - request_start
+                logger.info(f"[OLLAMA] Got response: status={response.status_code}, elapsed={elapsed:.1f}s")
 
                 if response.status_code == 404:
                     raise OllamaModelNotFoundError(model)
                 response.raise_for_status()
 
-                # Read and parse the streaming response
-                full_response = []
-                chunk_count = 0
-                for line in response.iter_lines():
-                    if line:
-                        chunk_count += 1
-                        if chunk_count == 1:
-                            logger.info(f"[OLLAMA] First chunk received after {time_module.time() - request_start:.1f}s")
-                        data = json.loads(line)
-                        if "response" in data:
-                            full_response.append(data["response"])
-
-                elapsed = time_module.time() - request_start
-                result = "".join(full_response)
-                logger.info(f"[OLLAMA] Response complete: {len(result)} chars, {chunk_count} chunks in {elapsed:.1f}s")
+                # Parse the JSON response
+                data = response.json()
+                result = data.get("response", "")
+                logger.info(f"[OLLAMA] Response complete: {len(result)} chars in {elapsed:.1f}s")
                 return result
 
             except req_lib.Timeout as e:
