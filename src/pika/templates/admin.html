@@ -185,7 +185,7 @@
                         </thead>
                         <tbody id="document-tbody">
                             <tr>
-                                <td colspan="4" class="empty-state">No documents uploaded yet</td>
+                                <td colspan="4" class="empty-state"><span class="spinner"></span> Loading documents...</td>
                             </tr>
                         </tbody>
                     </table>
@@ -194,11 +194,11 @@
                 <!-- Stats -->
                 <div class="stats-cards">
                     <div class="stat-card">
-                        <span class="stat-value" id="doc-count">0</span>
+                        <span class="stat-value" id="doc-count"><span class="spinner-small"></span></span>
                         <span class="stat-label">Documents</span>
                     </div>
                     <div class="stat-card">
-                        <span class="stat-value" id="chunk-count">0</span>
+                        <span class="stat-value" id="chunk-count"><span class="spinner-small"></span></span>
                         <span class="stat-label">Chunks Indexed</span>
                     </div>
                 </div>
@@ -609,6 +609,7 @@
     // ==================== Documents ====================
 
     async function loadDocuments() {
+        const tbody = document.getElementById('document-tbody');
         try {
             const [docsResponse, indexedResponse] = await Promise.all([
                 fetch('/documents'),
@@ -620,8 +621,6 @@
 
             const indexedMap = {};
             indexed.forEach(d => indexedMap[d.filename] = d.chunk_count);
-
-            const tbody = document.getElementById('document-tbody');
 
             if (documents.length === 0) {
                 tbody.innerHTML = `
@@ -649,6 +648,11 @@
             `).join('');
         } catch (error) {
             console.error('Failed to load documents:', error);
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="4" class="empty-state">Failed to load documents</td>
+                </tr>
+            `;
         }
     }
 
@@ -660,6 +664,9 @@
             document.getElementById('chunk-count').textContent = stats.total_chunks;
         } catch (error) {
             console.error('Failed to load stats:', error);
+            // Show 0 on error instead of leaving spinner
+            document.getElementById('doc-count').textContent = '0';
+            document.getElementById('chunk-count').textContent = '0';
         }
     }
 
