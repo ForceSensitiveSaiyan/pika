@@ -59,7 +59,7 @@ The test suite includes:
 - **Auth tests** (`test_auth.py`) - Authentication and sessions
 - **Security tests** (`test_security.py`) - Password hashing, CSRF, rate limiting
 
-Tests run without requiring Ollama (mocked) and complete in under 30 seconds.
+Tests run without requiring Ollama (mocked) and complete in about 70 seconds.
 
 ### Test Coverage
 
@@ -202,8 +202,11 @@ For large document collections, indexing may take several minutes. PIKA supports
 - `POST /api/v1/index/start` - Start background indexing (returns immediately)
 - `GET /api/v1/index/status` - Poll for progress (shows current file, percent complete)
 - `POST /api/v1/index/cancel` - Cancel a running indexing operation
+- `GET /api/v1/index/info` - Get combined stats and document list (optimized, cached)
 
 The default timeout for indexing is 10 minutes (600 seconds). Adjust with the `INDEX_TIMEOUT` environment variable if needed.
+
+**Performance note:** Stats and document lists are cached for 60 seconds to improve admin page load times with large document sets.
 
 ### Poor answer quality
 
