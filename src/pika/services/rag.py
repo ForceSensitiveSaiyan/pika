@@ -2,10 +2,12 @@
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from threading import Lock
 from typing import Callable
 
 import chromadb
@@ -23,6 +25,10 @@ from pika.services.ollama import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Cache TTL in seconds
+STATS_CACHE_TTL = 60  # 1 minute cache for stats
+DOCS_CACHE_TTL = 60   # 1 minute cache for indexed documents list
 
 
 class Confidence(str, Enum):
@@ -401,6 +407,13 @@ class RAGEngine:
 
         self._collection = None
 
+        # Cache for stats and indexed documents (thread-safe)
+        self._cache_lock = Lock()
+        self._stats_cache: IndexStats | None = None
+        self._stats_cache_time: float = 0
+        self._docs_cache: list[IndexedDocument] | None = None
+        self._docs_cache_time: float = 0
+
     @property
     def embedding_model(self) -> SentenceTransformer:
         """Lazy-load the embedding model."""
@@ -453,18 +466,21 @@ class RAGEngine:
         chunks = self.document_processor.process_all_documents()
 
         if not chunks:
-            return IndexStats(
+            stats = IndexStats(
                 total_documents=0,
                 total_chunks=0,
                 collection_name=self.COLLECTION_NAME,
             )
+            self._update_cache(stats, [])
+            return stats
 
         # Prepare data for ChromaDB
         ids = []
         documents = []
         metadatas = []
 
-        seen_sources = set()
+        # Track chunks per source for cache
+        source_chunks: dict[str, int] = {}
 
         for i, chunk in enumerate(chunks):
             ids.append(f"chunk_{i}")
@@ -474,7 +490,7 @@ class RAGEngine:
                 "chunk_index": chunk.chunk_index,
                 "total_chunks": chunk.total_chunks,
             })
-            seen_sources.add(chunk.source)
+            source_chunks[chunk.source] = source_chunks.get(chunk.source, 0) + 1
 
         # Generate embeddings
         embeddings = self._embed(documents)
@@ -492,11 +508,20 @@ class RAGEngine:
             )
             logger.debug(f"[RAG] Added batch {i//batch_size + 1}/{(total_items + batch_size - 1)//batch_size} to ChromaDB")
 
-        return IndexStats(
-            total_documents=len(seen_sources),
+        stats = IndexStats(
+            total_documents=len(source_chunks),
             total_chunks=len(chunks),
             collection_name=self.COLLECTION_NAME,
         )
+
+        # Build and cache the indexed documents list
+        indexed_docs = [
+            IndexedDocument(filename=filename, chunk_count=count)
+            for filename, count in sorted(source_chunks.items())
+        ]
+        self._update_cache(stats, indexed_docs)
+
+        return stats
 
     async def index_documents_async(
         self,
@@ -521,15 +546,17 @@ class RAGEngine:
         if total_docs == 0:
             if progress_callback:
                 progress_callback(0, 0, None, 0)
-            return IndexStats(
+            stats = IndexStats(
                 total_documents=0,
                 total_chunks=0,
                 collection_name=self.COLLECTION_NAME,
             )
+            self._update_cache(stats, [])
+            return stats
 
         # Process documents one by one with progress reporting
         all_chunks = []
-        seen_sources = set()
+        source_chunks: dict[str, int] = {}  # Track chunks per source for cache
 
         for i, doc_info in enumerate(doc_list):
             # Report progress before processing
@@ -543,7 +570,7 @@ class RAGEngine:
                 # Process this document
                 chunks = self.document_processor.process_document(doc_info.path)
                 all_chunks.extend(chunks)
-                seen_sources.add(doc_info.filename)
+                source_chunks[doc_info.filename] = len(chunks)
             except Exception as e:
                 # Log warning but continue with other documents
                 logger.warning(f"[RAG] Failed to process {doc_info.filename}: {e}")
@@ -554,11 +581,13 @@ class RAGEngine:
             progress_callback(total_docs, total_docs, None, len(all_chunks))
 
         if not all_chunks:
-            return IndexStats(
+            stats = IndexStats(
                 total_documents=0,
                 total_chunks=0,
                 collection_name=self.COLLECTION_NAME,
             )
+            self._update_cache(stats, [])
+            return stats
 
         # Prepare data for ChromaDB
         ids = []
@@ -592,17 +621,49 @@ class RAGEngine:
             # Allow other async tasks to run between batches
             await asyncio.sleep(0)
 
-        return IndexStats(
-            total_documents=len(seen_sources),
+        stats = IndexStats(
+            total_documents=len(source_chunks),
             total_chunks=len(all_chunks),
             collection_name=self.COLLECTION_NAME,
         )
 
+        # Build and cache the indexed documents list
+        indexed_docs = [
+            IndexedDocument(filename=filename, chunk_count=count)
+            for filename, count in sorted(source_chunks.items())
+        ]
+        self._update_cache(stats, indexed_docs)
+
+        return stats
+
+    def invalidate_cache(self) -> None:
+        """Invalidate all cached data. Call after index changes."""
+        with self._cache_lock:
+            self._stats_cache = None
+            self._stats_cache_time = 0
+            self._docs_cache = None
+            self._docs_cache_time = 0
+
+    def _update_cache(self, stats: IndexStats, docs: list[IndexedDocument] | None = None) -> None:
+        """Update the cache with fresh data after indexing."""
+        with self._cache_lock:
+            self._stats_cache = stats
+            self._stats_cache_time = time.time()
+            if docs is not None:
+                self._docs_cache = docs
+                self._docs_cache_time = time.time()
+
     def get_stats(self) -> IndexStats:
-        """Get current index statistics."""
+        """Get current index statistics (cached for performance)."""
+        # Check cache first
+        with self._cache_lock:
+            if self._stats_cache and (time.time() - self._stats_cache_time) < STATS_CACHE_TTL:
+                return self._stats_cache
+
+        # Cache miss - compute stats
         count = self.collection.count()
 
-        # Get unique sources
+        # Get unique sources - only if there are documents
         if count > 0:
             results = self.collection.get(include=["metadatas"])
             sources = set(m["source"] for m in results["metadatas"])
@@ -610,30 +671,50 @@ class RAGEngine:
         else:
             doc_count = 0
 
-        return IndexStats(
+        stats = IndexStats(
             total_documents=doc_count,
             total_chunks=count,
             collection_name=self.COLLECTION_NAME,
         )
 
+        # Update cache
+        with self._cache_lock:
+            self._stats_cache = stats
+            self._stats_cache_time = time.time()
+
+        return stats
+
     def get_indexed_documents(self) -> list[IndexedDocument]:
-        """Get list of indexed documents with their chunk counts."""
+        """Get list of indexed documents with their chunk counts (cached for performance)."""
+        # Check cache first
+        with self._cache_lock:
+            if self._docs_cache is not None and (time.time() - self._docs_cache_time) < DOCS_CACHE_TTL:
+                return self._docs_cache
+
+        # Cache miss - compute document list
         if self.collection.count() == 0:
-            return []
+            docs = []
+        else:
+            results = self.collection.get(include=["metadatas"])
 
-        results = self.collection.get(include=["metadatas"])
+            # Count chunks per document
+            chunk_counts: dict[str, int] = {}
+            for metadata in results["metadatas"]:
+                source = metadata["source"]
+                chunk_counts[source] = chunk_counts.get(source, 0) + 1
 
-        # Count chunks per document
-        chunk_counts: dict[str, int] = {}
-        for metadata in results["metadatas"]:
-            source = metadata["source"]
-            chunk_counts[source] = chunk_counts.get(source, 0) + 1
+            # Sort by filename
+            docs = [
+                IndexedDocument(filename=filename, chunk_count=count)
+                for filename, count in sorted(chunk_counts.items())
+            ]
 
-        # Sort by filename
-        return [
-            IndexedDocument(filename=filename, chunk_count=count)
-            for filename, count in sorted(chunk_counts.items())
-        ]
+        # Update cache
+        with self._cache_lock:
+            self._docs_cache = docs
+            self._docs_cache_time = time.time()
+
+        return docs
 
     def clear_index(self) -> None:
         """Clear all documents from the index."""
@@ -643,6 +724,8 @@ class RAGEngine:
         except ValueError:
             # Collection doesn't exist
             pass
+        # Invalidate cache
+        self.invalidate_cache()
 
     async def query(
         self,

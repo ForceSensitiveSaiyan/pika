@@ -281,6 +281,20 @@ class TestAsyncIndexingAPI:
             response = test_client.post("/api/v1/index/cancel")
         assert response.status_code == 401
 
+    def test_index_info_combined_endpoint(self, test_client):
+        """Verify combined index info endpoint returns stats and documents."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=False):
+            response = test_client.get("/api/v1/index/info")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Should have both stats and documents
+        assert "total_documents" in data
+        assert "total_chunks" in data
+        assert "collection_name" in data
+        assert "documents" in data
+        assert isinstance(data["documents"], list)
+
     def test_sync_index_blocked_when_async_running(self, test_client):
         """Verify sync index returns 409 when async indexing is running."""
         from pika.services.rag import IndexStatus, _set_active_index

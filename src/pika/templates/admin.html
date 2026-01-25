@@ -347,8 +347,7 @@
         }
 
         loadModels();
-        loadDocuments();
-        loadStats();
+        loadDocumentsAndStats();  // Combined call for better performance
         loadUsers();
         setupUpload();
         checkActivePull();
@@ -608,19 +607,32 @@
 
     // ==================== Documents ====================
 
-    async function loadDocuments() {
+    async function loadDocumentsAndStats() {
+        /**
+         * Combined function to load documents and stats in optimized API calls.
+         * Uses /api/v1/index/info for cached stats+indexed docs (single call).
+         */
         const tbody = document.getElementById('document-tbody');
+        const docCount = document.getElementById('doc-count');
+        const chunkCount = document.getElementById('chunk-count');
+
         try {
-            const [docsResponse, indexedResponse] = await Promise.all([
+            // Fetch file list and index info in parallel
+            const [docsResponse, indexInfoResponse] = await Promise.all([
                 fetch('/documents'),
-                fetch('/api/v1/documents')
+                fetch('/api/v1/index/info')  // Combined stats + indexed docs
             ]);
 
             const documents = await docsResponse.json();
-            const indexed = await indexedResponse.json();
+            const indexInfo = await indexInfoResponse.json();
 
+            // Update stats from cached response
+            docCount.textContent = indexInfo.total_documents;
+            chunkCount.textContent = indexInfo.total_chunks;
+
+            // Build indexed map from combined response
             const indexedMap = {};
-            indexed.forEach(d => indexedMap[d.filename] = d.chunk_count);
+            indexInfo.documents.forEach(d => indexedMap[d.filename] = d.chunk_count);
 
             if (documents.length === 0) {
                 tbody.innerHTML = `
@@ -653,21 +665,20 @@
                     <td colspan="4" class="empty-state">Failed to load documents</td>
                 </tr>
             `;
+            docCount.textContent = '0';
+            chunkCount.textContent = '0';
         }
     }
 
+    // Keep individual functions for specific use cases
+    async function loadDocuments() {
+        // Delegate to combined function for consistency
+        await loadDocumentsAndStats();
+    }
+
     async function loadStats() {
-        try {
-            const response = await fetch('/api/v1/index/stats');
-            const stats = await response.json();
-            document.getElementById('doc-count').textContent = stats.total_documents;
-            document.getElementById('chunk-count').textContent = stats.total_chunks;
-        } catch (error) {
-            console.error('Failed to load stats:', error);
-            // Show 0 on error instead of leaving spinner
-            document.getElementById('doc-count').textContent = '0';
-            document.getElementById('chunk-count').textContent = '0';
-        }
+        // Delegate to combined function for consistency
+        await loadDocumentsAndStats();
     }
 
     async function refreshIndex() {
@@ -678,7 +689,7 @@
         try {
             const response = await fetch('/api/v1/index', { method: 'POST' });
             const result = await response.json();
-            await Promise.all([loadStats(), loadDocuments()]);
+            await loadDocumentsAndStats();  // Use combined function
             showToast(`Indexed ${result.total_documents} documents (${result.total_chunks} chunks)`, 'success');
         } catch (error) {
             showToast('Failed to refresh index', 'error');
@@ -742,7 +753,7 @@
                 showToast(`Failed to upload ${file.name}`, 'error');
             }
         }
-        await loadDocuments();
+        await loadDocumentsAndStats();
     }
 
     async function deleteDocument(filename) {
@@ -756,7 +767,7 @@
             if (!response.ok) throw new Error('Delete failed');
 
             showToast(`Deleted: ${filename}`, 'success');
-            await loadDocuments();
+            await loadDocumentsAndStats();
         } catch (error) {
             showToast('Failed to delete file', 'error');
         }

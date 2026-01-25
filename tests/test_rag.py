@@ -663,3 +663,62 @@ class TestAsyncIndexing:
 
         # Cleanup
         _set_active_index(None)
+
+
+class TestCaching:
+    """Tests for stats and document caching."""
+
+    def test_cache_invalidation(self, temp_dirs):
+        """Verify cache is invalidated after clear_index."""
+        import os
+        from pika.services.rag import RAGEngine, IndexStats
+
+        settings = MagicMock()
+        settings.chroma_persist_dir = os.path.join(temp_dirs["data"], "chroma")
+        settings.documents_dir = temp_dirs["docs"]
+        settings.embedding_model = "all-MiniLM-L6-v2"
+
+        rag = RAGEngine(settings=settings)
+
+        # Manually set cache
+        rag._stats_cache = IndexStats(
+            total_documents=10,
+            total_chunks=100,
+            collection_name="test",
+        )
+        rag._stats_cache_time = 9999999999  # Far future
+
+        # Clear index should invalidate cache
+        rag.clear_index()
+
+        assert rag._stats_cache is None
+        assert rag._stats_cache_time == 0
+
+    def test_update_cache(self, temp_dirs):
+        """Verify _update_cache correctly sets cache values."""
+        import os
+        from pika.services.rag import RAGEngine, IndexStats, IndexedDocument
+
+        settings = MagicMock()
+        settings.chroma_persist_dir = os.path.join(temp_dirs["data"], "chroma")
+        settings.documents_dir = temp_dirs["docs"]
+        settings.embedding_model = "all-MiniLM-L6-v2"
+
+        rag = RAGEngine(settings=settings)
+
+        stats = IndexStats(
+            total_documents=5,
+            total_chunks=50,
+            collection_name="test",
+        )
+        docs = [
+            IndexedDocument(filename="doc1.pdf", chunk_count=25),
+            IndexedDocument(filename="doc2.pdf", chunk_count=25),
+        ]
+
+        rag._update_cache(stats, docs)
+
+        assert rag._stats_cache is not None
+        assert rag._stats_cache.total_documents == 5
+        assert rag._docs_cache is not None
+        assert len(rag._docs_cache) == 2

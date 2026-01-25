@@ -613,6 +613,40 @@ async def get_index_stats(
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {e}")
 
 
+class IndexInfoResponse(BaseModel):
+    """Combined response with stats and indexed documents."""
+
+    total_documents: int
+    total_chunks: int
+    collection_name: str
+    documents: list[IndexedDocumentResponse]
+
+
+@router.get("/index/info", response_model=IndexInfoResponse)
+async def get_index_info(
+    rag: RAGEngine = Depends(get_rag_engine),
+    _: bool = Depends(require_admin_or_api_auth),
+) -> IndexInfoResponse:
+    """Get combined index stats and document list in a single call (optimized)."""
+    try:
+        stats = rag.get_stats()
+        documents = rag.get_indexed_documents()
+        return IndexInfoResponse(
+            total_documents=stats.total_documents,
+            total_chunks=stats.total_chunks,
+            collection_name=stats.collection_name,
+            documents=[
+                IndexedDocumentResponse(
+                    filename=doc.filename,
+                    chunk_count=doc.chunk_count,
+                )
+                for doc in documents
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get index info: {e}")
+
+
 @router.get("/documents", response_model=list[IndexedDocumentResponse])
 async def get_indexed_documents(
     rag: RAGEngine = Depends(get_rag_engine),
