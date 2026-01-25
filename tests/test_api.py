@@ -36,14 +36,29 @@ class TestHealthEndpoint:
 class TestModelsEndpoint:
     """Tests for the models endpoint."""
 
-    def test_list_models_returns_valid_response(self, test_client):
+    def test_list_models_returns_valid_response(self, test_client, mock_ollama_client):
         """Verify models endpoint returns a valid list."""
-        response = test_client.get("/api/v1/models")
+        from pika.main import app
+        from pika.services.ollama import ModelInfo, get_ollama_client
+
+        # Set up mock to return some models
+        mock_ollama_client.list_models = AsyncMock(return_value=[
+            ModelInfo(name="llama3.2:3b", size=1234567890, modified_at="2026-01-24"),
+            ModelInfo(name="mistral:7b", size=4000000000, modified_at="2026-01-23"),
+        ])
+
+        # Use FastAPI's dependency override mechanism
+        app.dependency_overrides[get_ollama_client] = lambda: mock_ollama_client
+        try:
+            response = test_client.get("/api/v1/models")
+        finally:
+            app.dependency_overrides.clear()
 
         assert response.status_code == 200
         data = response.json()
         # Should be a list
         assert isinstance(data, list)
+        assert len(data) == 2
         # Each model should have required fields
         for model in data:
             assert "name" in model
