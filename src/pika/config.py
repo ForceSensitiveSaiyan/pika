@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     chunk_size: int = 500
     chunk_overlap: int = 50
     top_k: int = 5
+    index_timeout: int = 600  # 10 minutes default for async indexing
 
     # Document settings
     documents_dir: str = "./documents"

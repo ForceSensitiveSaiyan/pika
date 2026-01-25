@@ -118,6 +118,7 @@ PIKA is configured via environment variables. Set these in your `docker-compose.
 | `CHUNK_OVERLAP` | `50` | Overlap between chunks |
 | `TOP_K` | `5` | Number of relevant chunks to retrieve |
 | `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Sentence transformer model for embeddings |
+| `INDEX_TIMEOUT` | `600` | Timeout in seconds for async indexing operations |
 
 ### Vector Store Settings
 
@@ -193,6 +194,16 @@ LLMs require significant RAM. If you're running out of memory:
 ### Documents not appearing after upload
 
 After uploading documents, click **"Refresh Index"** to process and index them. Documents must be indexed before they can be queried.
+
+### Indexing large document sets
+
+For large document collections, indexing may take several minutes. PIKA supports async indexing with progress reporting via the API:
+
+- `POST /api/v1/index/start` - Start background indexing (returns immediately)
+- `GET /api/v1/index/status` - Poll for progress (shows current file, percent complete)
+- `POST /api/v1/index/cancel` - Cancel a running indexing operation
+
+The default timeout for indexing is 10 minutes (600 seconds). Adjust with the `INDEX_TIMEOUT` environment variable if needed.
 
 ### Poor answer quality
 

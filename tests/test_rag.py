@@ -534,3 +534,132 @@ class TestQueryCancellation:
 
         clear_query_status()
         assert get_active_query() is None
+
+
+class TestAsyncIndexing:
+    """Tests for async indexing functionality."""
+
+    def test_index_status_creation(self):
+        """Verify IndexStatus can be created with default values."""
+        from pika.services.rag import IndexStatus
+
+        status = IndexStatus(index_id="test123")
+
+        assert status.index_id == "test123"
+        assert status.status == "pending"
+        assert status.total_documents == 0
+        assert status.processed_documents == 0
+        assert status.total_chunks == 0
+        assert status.current_file is None
+        assert status.error is None
+        assert status.started_at is not None
+        assert status.completed_at is None
+
+    def test_index_status_percent_zero_documents(self):
+        """Verify percent is 0 when total_documents is 0."""
+        from pika.services.rag import IndexStatus
+
+        status = IndexStatus(index_id="test123")
+        assert status.percent == 0
+
+    def test_index_status_percent_partial(self):
+        """Verify percent calculation with partial progress."""
+        from pika.services.rag import IndexStatus
+
+        status = IndexStatus(
+            index_id="test123",
+            total_documents=10,
+            processed_documents=4,
+        )
+        assert status.percent == 40
+
+    def test_index_status_percent_complete(self):
+        """Verify percent is 100 when all documents processed."""
+        from pika.services.rag import IndexStatus
+
+        status = IndexStatus(
+            index_id="test123",
+            total_documents=5,
+            processed_documents=5,
+        )
+        assert status.percent == 100
+
+    def test_index_status_to_dict(self):
+        """Verify IndexStatus converts to dict correctly."""
+        from pika.services.rag import IndexStatus
+
+        status = IndexStatus(
+            index_id="test123",
+            status="running",
+            total_documents=10,
+            processed_documents=5,
+            total_chunks=100,
+            current_file="test.pdf",
+        )
+
+        data = status.to_dict()
+
+        assert data["index_id"] == "test123"
+        assert data["status"] == "running"
+        assert data["total_documents"] == 10
+        assert data["processed_documents"] == 5
+        assert data["total_chunks"] == 100
+        assert data["current_file"] == "test.pdf"
+        assert data["percent"] == 50
+        assert data["started_at"] is not None
+        assert data["completed_at"] is None
+        assert data["error"] is None
+
+    def test_is_indexing_running_false_initially(self):
+        """Verify no indexing is running initially."""
+        from pika.services.rag import is_indexing_running
+
+        # Reset state
+        import pika.services.rag as rag_module
+        rag_module._index_task = None
+
+        assert is_indexing_running() is False
+
+    def test_cancel_index_when_not_running(self):
+        """Verify cancelling when no indexing running returns False."""
+        from pika.services.rag import cancel_index_task
+
+        # Reset state
+        import pika.services.rag as rag_module
+        rag_module._index_task = None
+
+        result = cancel_index_task()
+        assert result is False
+
+    def test_get_active_index_none_initially(self):
+        """Verify get_active_index returns None initially."""
+        from pika.services.rag import get_active_index, _set_active_index
+
+        # Reset state
+        _set_active_index(None)
+
+        assert get_active_index() is None
+
+    def test_set_and_get_active_index(self):
+        """Verify setting and getting active index works."""
+        from pika.services.rag import (
+            get_active_index,
+            _set_active_index,
+            IndexStatus,
+        )
+
+        # Reset state first
+        _set_active_index(None)
+        assert get_active_index() is None
+
+        # Set an index status
+        status = IndexStatus(index_id="test456", status="running")
+        _set_active_index(status)
+
+        result = get_active_index()
+        assert result is not None
+        assert result.index_id == "test456"
+        assert result.status == "running"
+
+        # Cleanup
+        _set_active_index(None)

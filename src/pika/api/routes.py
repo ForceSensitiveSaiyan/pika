@@ -28,11 +28,15 @@ from pika.services.ollama import (
 from pika.services.rag import (
     Confidence,
     RAGEngine,
+    cancel_index_task,
     cancel_query,
     clear_query_status,
+    get_active_index,
     get_active_query,
     get_rag_engine,
+    is_indexing_running,
     is_query_running,
+    start_index_task,
     start_query_task,
 )
 
@@ -443,7 +447,14 @@ async def index_documents(
     rag: RAGEngine = Depends(get_rag_engine),
     _: bool = Depends(require_admin_or_api_auth),
 ) -> IndexResponse:
-    """Reindex all documents from the documents directory."""
+    """Reindex all documents from the documents directory (synchronous)."""
+    # Check if async indexing is in progress
+    if is_indexing_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Async indexing is already in progress. Use /index/status to check progress.",
+        )
+
     try:
         stats = rag.index_documents()
 
@@ -463,7 +474,126 @@ async def index_documents(
             total_chunks=stats.total_chunks,
         )
     except Exception as e:
+        logger.exception(f"Indexing failed: {e}")
         raise HTTPException(status_code=500, detail=f"Indexing failed: {e}")
+
+
+# --- Async Indexing Endpoints ---
+
+
+class StartIndexRequest(BaseModel):
+    """Request model for starting async indexing."""
+
+    timeout: int | None = None  # Optional timeout in seconds
+
+
+class StartIndexResponse(BaseModel):
+    """Response model for starting async indexing."""
+
+    index_id: str
+    status: str
+    message: str
+
+
+class IndexStatusResponse(BaseModel):
+    """Response model for indexing status."""
+
+    active: bool
+    index_id: str | None = None
+    status: str | None = None
+    total_documents: int = 0
+    processed_documents: int = 0
+    current_file: str | None = None
+    percent: int = 0
+    total_chunks: int = 0
+    error: str | None = None
+
+
+class CancelIndexResponse(BaseModel):
+    """Response model for cancel indexing."""
+
+    cancelled: bool
+    message: str
+
+
+@router.post("/index/start", response_model=StartIndexResponse)
+async def start_indexing(
+    request: StartIndexRequest | None = None,
+    _: bool = Depends(require_admin_or_api_auth),
+) -> StartIndexResponse:
+    """Start async background indexing with progress reporting."""
+    if is_indexing_running():
+        index = get_active_index()
+        return StartIndexResponse(
+            index_id=index.index_id if index else "",
+            status="already_running",
+            message="Indexing is already in progress",
+        )
+
+    # Start the indexing task
+    timeout = request.timeout if request else None
+    index_status = await start_index_task(timeout=timeout)
+
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_admin_action("start_async_indexing", {"index_id": index_status.index_id})
+
+    return StartIndexResponse(
+        index_id=index_status.index_id,
+        status="started",
+        message="Indexing started",
+    )
+
+
+@router.get("/index/status", response_model=IndexStatusResponse)
+async def get_indexing_status() -> IndexStatusResponse:
+    """Get the status of any active indexing operation."""
+    index = get_active_index()
+    if index is None:
+        return IndexStatusResponse(active=False)
+
+    return IndexStatusResponse(
+        active=is_indexing_running() or index.status == "running",
+        index_id=index.index_id,
+        status=index.status,
+        total_documents=index.total_documents,
+        processed_documents=index.processed_documents,
+        current_file=index.current_file,
+        percent=index.percent,
+        total_chunks=index.total_chunks,
+        error=index.error,
+    )
+
+
+@router.post("/index/cancel", response_model=CancelIndexResponse)
+async def cancel_indexing(
+    _: bool = Depends(require_admin_or_api_auth),
+) -> CancelIndexResponse:
+    """Cancel an active indexing operation."""
+    if not is_indexing_running():
+        return CancelIndexResponse(
+            cancelled=False,
+            message="No indexing operation is currently running",
+        )
+
+    cancelled = cancel_index_task()
+    if cancelled:
+        # Audit log
+        audit = get_audit_logger()
+        index = get_active_index()
+        audit.log_admin_action(
+            "cancel_indexing",
+            {"index_id": index.index_id if index else "unknown"},
+        )
+
+        return CancelIndexResponse(
+            cancelled=True,
+            message="Indexing cancelled",
+        )
+    return CancelIndexResponse(
+        cancelled=False,
+        message="Failed to cancel indexing",
+    )
 
 
 @router.get("/index/stats", response_model=IndexStatsResponse)

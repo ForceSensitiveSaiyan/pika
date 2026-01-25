@@ -213,6 +213,110 @@ class TestQueryStatusEndpoints:
         assert data["status"] == "cleared"
 
 
+class TestAsyncIndexingAPI:
+    """Tests for async indexing API endpoints."""
+
+    def test_start_indexing_endpoint(self, test_client):
+        """Verify start indexing endpoint returns valid response."""
+        # Reset indexing state
+        import pika.services.rag as rag_module
+        rag_module._index_task = None
+        rag_module._active_index = None
+
+        with patch("pika.api.web.is_admin_auth_required", return_value=False):
+            response = test_client.post("/api/v1/index/start")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "index_id" in data
+        assert "status" in data
+        assert data["status"] in ["started", "already_running"]
+        assert "message" in data
+
+    def test_index_status_endpoint(self, test_client):
+        """Verify index status endpoint returns valid response."""
+        response = test_client.get("/api/v1/index/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "active" in data
+
+    def test_index_status_when_not_running(self, test_client):
+        """Verify index status shows inactive when no indexing running."""
+        # Reset indexing state
+        import pika.services.rag as rag_module
+        rag_module._index_task = None
+        rag_module._active_index = None
+
+        response = test_client.get("/api/v1/index/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["active"] is False
+
+    def test_cancel_indexing_when_not_running(self, test_client):
+        """Verify cancel indexing returns appropriate response when not running."""
+        # Reset indexing state
+        import pika.services.rag as rag_module
+        rag_module._index_task = None
+        rag_module._active_index = None
+
+        with patch("pika.api.web.is_admin_auth_required", return_value=False):
+            response = test_client.post("/api/v1/index/cancel")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cancelled"] is False
+        assert "not" in data["message"].lower() or "no" in data["message"].lower()
+
+    def test_start_indexing_requires_auth(self, test_client):
+        """Verify start indexing requires authentication when auth is enabled."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=True):
+            response = test_client.post("/api/v1/index/start")
+        assert response.status_code == 401
+
+    def test_cancel_indexing_requires_auth(self, test_client):
+        """Verify cancel indexing requires authentication when auth is enabled."""
+        with patch("pika.api.web.is_admin_auth_required", return_value=True):
+            response = test_client.post("/api/v1/index/cancel")
+        assert response.status_code == 401
+
+    def test_sync_index_blocked_when_async_running(self, test_client):
+        """Verify sync index returns 409 when async indexing is running."""
+        from pika.services.rag import IndexStatus, _set_active_index
+        import pika.services.rag as rag_module
+        import asyncio
+
+        # Create a mock task that is not done
+        async def dummy():
+            await asyncio.sleep(100)
+
+        loop = asyncio.new_event_loop()
+        task = loop.create_task(dummy())
+        rag_module._index_task = task
+
+        # Set an active index status
+        status = IndexStatus(index_id="test123", status="running")
+        _set_active_index(status)
+
+        try:
+            with patch("pika.api.web.is_admin_auth_required", return_value=False):
+                response = test_client.post("/api/v1/index")
+
+            assert response.status_code == 409
+            assert "async indexing" in response.json()["detail"].lower()
+        finally:
+            # Cleanup
+            task.cancel()
+            try:
+                loop.run_until_complete(task)
+            except asyncio.CancelledError:
+                pass
+            loop.close()
+            rag_module._index_task = None
+            _set_active_index(None)
+
+
 class TestUserManagementEndpoints:
     """Tests for user management endpoints."""
 
