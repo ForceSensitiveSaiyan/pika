@@ -1621,6 +1621,12 @@ body {
     border-bottom: 1px solid var(--border);
 }
 
+.history-header-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
 .history-title {
     font-size: 14px;
     font-weight: 600;

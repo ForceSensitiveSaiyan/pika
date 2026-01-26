@@ -58,12 +58,20 @@
 <div class="history-panel hidden" id="history-panel">
     <div class="history-header">
         <h3 class="history-title">Recent Queries</h3>
-        <button class="btn btn-ghost btn-icon" onclick="toggleHistory()" title="Close">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-        </button>
+        <div class="history-header-actions">
+            <button class="btn btn-ghost btn-icon" onclick="clearChatHistory()" title="Clear history">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="3 6 5 6 21 6"></polyline>
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+            </button>
+            <button class="btn btn-ghost btn-icon" onclick="toggleHistory()" title="Close">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+        </div>
     </div>
     <div class="history-list" id="history-list">
         <div class="history-empty">No recent queries</div>
@@ -255,6 +263,49 @@
         document.getElementById('chat-form').dispatchEvent(new Event('submit'));
     }
 
+    async function clearChatHistory() {
+        if (!confirm('Clear all chat history? This will remove both the current conversation and saved query history.')) {
+            return;
+        }
+
+        try {
+            // Clear server-side history
+            const response = await fetch('/api/v1/history', { method: 'DELETE' });
+            if (!response.ok) throw new Error('Failed to clear server history');
+
+            // Clear client-side session storage
+            sessionStorage.removeItem(getChatHistoryKey());
+            chatHistory = [];
+
+            // Reset chat UI
+            const container = document.getElementById('chat-messages');
+            container.innerHTML = `
+                <div class="welcome" id="welcome">
+                    <svg class="welcome-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    <h1 class="welcome-title">Ask anything about your documents</h1>
+                    <p class="welcome-text">
+                        ${IS_ADMIN
+                            ? 'Upload and index documents in the <a href="/admin">Admin</a> section, then ask questions here.'
+                            : 'Ask questions about the documents that have been indexed.'}
+                    </p>
+                </div>
+            `;
+
+            // Refresh history panel
+            loadHistory();
+
+            // Update onboarding if needed
+            await updateOnboarding();
+
+            showToast('Chat history cleared', 'success');
+        } catch (error) {
+            console.error('Failed to clear history:', error);
+            showToast('Failed to clear history', 'error');
+        }
+    }
+
     function formatTime(isoString) {
         const date = new Date(isoString);
         const now = new Date();
@@ -348,40 +399,43 @@
                 if (status.status === 'completed') {
                     stopQueryPolling();
 
+                    // Use currentLoadingId as guard - only first callback to arrive processes completion
+                    // This prevents duplicate messages from concurrent async callbacks
                     if (currentLoadingId) {
                         removeMessage(currentLoadingId);
                         currentLoadingId = null;
-                    }
 
-                    if (status.result) {
-                        addAnswerMessage(status.result, status.query_id);
-                        chatHistory.push({ type: 'assistant', result: status.result, queryId: status.query_id });
-                        saveChatHistory();
-                    }
+                        if (status.result) {
+                            addAnswerMessage(status.result, status.query_id);
+                            chatHistory.push({ type: 'assistant', result: status.result, queryId: status.query_id });
+                            saveChatHistory();
+                        }
 
-                    isLoading = false;
-                    updateSendButton();
-                    await updateOnboarding();
-                    await fetch('/api/v1/query/status', { method: 'DELETE' });
+                        isLoading = false;
+                        updateSendButton();
+                        await updateOnboarding();
+                        await fetch('/api/v1/query/status', { method: 'DELETE' });
+                    }
 
                 } else if (status.status === 'error' || status.status === 'cancelled') {
                     stopQueryPolling();
 
+                    // Use currentLoadingId as guard for error/cancel handling too
                     if (currentLoadingId) {
                         removeMessage(currentLoadingId);
                         currentLoadingId = null;
+
+                        const errorMsg = status.status === 'cancelled'
+                            ? 'Query was cancelled'
+                            : 'Error: ' + (status.error || 'Query failed');
+                        addMessage(errorMsg, 'error');
+                        chatHistory.push({ type: 'error', content: errorMsg });
+                        saveChatHistory();
+
+                        isLoading = false;
+                        updateSendButton();
+                        await fetch('/api/v1/query/status', { method: 'DELETE' });
                     }
-
-                    const errorMsg = status.status === 'cancelled'
-                        ? 'Query was cancelled'
-                        : 'Error: ' + (status.error || 'Query failed');
-                    addMessage(errorMsg, 'error');
-                    chatHistory.push({ type: 'error', content: errorMsg });
-                    saveChatHistory();
-
-                    isLoading = false;
-                    updateSendButton();
-                    await fetch('/api/v1/query/status', { method: 'DELETE' });
 
                 } else if (status.status === 'none' && isLoading) {
                     // Stale query detection: backend has no query but frontend thinks one is running
