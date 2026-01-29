@@ -308,6 +308,12 @@
                             </svg>
                             Download Backup
                         </button>
+                        <div class="backup-progress" id="backup-progress">
+                            <div class="backup-progress-bar">
+                                <div class="backup-progress-fill" id="backup-progress-fill"></div>
+                            </div>
+                            <span class="backup-progress-text" id="backup-progress-text">Preparing...</span>
+                        </div>
                     </div>
 
                     <!-- Restore Card -->
@@ -446,6 +452,7 @@
         loadModels();
         loadDocumentsAndStats();  // Combined call for better performance
         loadUsers();
+        checkBackupStatus();  // Resume backup progress if one was running
         setupUpload();
         checkActivePull();
 
@@ -1164,32 +1171,145 @@
 
     // ==================== Backup & Restore ====================
 
-    function downloadBackup() {
-        const btn = document.getElementById('backup-btn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Creating backup...';
+    let backupPollingInterval = null;
 
-        // Create a temporary link to trigger the download
+    async function downloadBackup() {
+        const btn = document.getElementById('backup-btn');
+        const progress = document.getElementById('backup-progress');
+        const progressFill = document.getElementById('backup-progress-fill');
+        const progressText = document.getElementById('backup-progress-text');
+
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Starting backup...';
+
+        try {
+            // Start the backup
+            const response = await fetch('/admin/backup/start', { method: 'POST' });
+            const result = await response.json();
+
+            if (!result.started && result.backup?.status === 'completed') {
+                // Backup already exists, download it
+                downloadBackupFile();
+                return;
+            }
+
+            if (!result.started && result.backup?.status !== 'preparing' && result.backup?.status !== 'running') {
+                throw new Error(result.message || 'Failed to start backup');
+            }
+
+            // Show progress bar
+            progress.classList.add('visible');
+            progressFill.style.width = '0%';
+            progressText.textContent = 'Preparing backup...';
+
+            // Start polling for progress
+            startBackupPolling();
+
+        } catch (error) {
+            showToast(`Backup failed: ${error.message}`, 'error');
+            resetBackupButton();
+        }
+    }
+
+    function startBackupPolling() {
+        if (backupPollingInterval) return;
+
+        backupPollingInterval = setInterval(async () => {
+            try {
+                const response = await fetch('/admin/backup/status');
+                const status = await response.json();
+
+                if (!status.active) {
+                    stopBackupPolling();
+                    resetBackupButton();
+                    return;
+                }
+
+                const backup = status.backup;
+                const progress = document.getElementById('backup-progress');
+                const progressFill = document.getElementById('backup-progress-fill');
+                const progressText = document.getElementById('backup-progress-text');
+
+                progressFill.style.width = `${backup.progress}%`;
+                progressText.textContent = `${backup.processed_files} / ${backup.total_files} files (${backup.progress}%)`;
+
+                if (backup.status === 'completed') {
+                    stopBackupPolling();
+                    progressText.textContent = 'Backup complete! Starting download...';
+
+                    // Trigger download
+                    setTimeout(() => {
+                        downloadBackupFile();
+                        // Clear backup status after download starts
+                        setTimeout(async () => {
+                            await fetch('/admin/backup', { method: 'DELETE' });
+                            progress.classList.remove('visible');
+                            resetBackupButton();
+                        }, 1000);
+                    }, 500);
+
+                } else if (backup.status === 'error') {
+                    stopBackupPolling();
+                    showToast(`Backup failed: ${backup.error}`, 'error');
+                    progress.classList.remove('visible');
+                    resetBackupButton();
+                }
+
+            } catch (error) {
+                console.error('Backup polling error:', error);
+            }
+        }, 500);
+    }
+
+    function stopBackupPolling() {
+        if (backupPollingInterval) {
+            clearInterval(backupPollingInterval);
+            backupPollingInterval = null;
+        }
+    }
+
+    function downloadBackupFile() {
         const link = document.createElement('a');
-        link.href = '/admin/backup';
-        link.download = '';  // Let the server set the filename
+        link.href = '/admin/backup/download';
+        link.download = '';
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        showToast('Backup download started', 'success');
+    }
 
-        // Reset button after a short delay (download starts async)
-        setTimeout(() => {
-            btn.disabled = false;
-            btn.innerHTML = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                    <polyline points="7 10 12 15 17 10"></polyline>
-                    <line x1="12" y1="15" x2="12" y2="3"></line>
-                </svg>
-                Download Backup
-            `;
-            showToast('Backup download started', 'success');
-        }, 1000);
+    function resetBackupButton() {
+        const btn = document.getElementById('backup-btn');
+        btn.disabled = false;
+        btn.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Download Backup
+        `;
+    }
+
+    // Check for existing backup on page load
+    async function checkBackupStatus() {
+        try {
+            const response = await fetch('/admin/backup/status');
+            const status = await response.json();
+
+            if (status.active && (status.backup.status === 'preparing' || status.backup.status === 'running')) {
+                // Resume showing progress
+                const btn = document.getElementById('backup-btn');
+                const progress = document.getElementById('backup-progress');
+
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner"></span> Backup in progress...';
+                progress.classList.add('visible');
+                startBackupPolling();
+            }
+        } catch (error) {
+            console.error('Failed to check backup status:', error);
+        }
     }
 
     function updateRestoreButton() {

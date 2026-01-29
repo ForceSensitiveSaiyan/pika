@@ -1,9 +1,12 @@
 """Web interface routes for PIKA."""
 
+import asyncio
 import hashlib
 import logging
 import secrets
 import time
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
@@ -726,100 +729,284 @@ async def admin_logs_page(request: Request):
     return response
 
 
-@router.get("/admin/backup")
-async def download_backup(
+# Background backup state
+@dataclass
+class BackupStatus:
+    """Status of a backup operation."""
+    backup_id: str
+    status: str = "preparing"  # preparing, running, completed, error
+    progress: int = 0  # 0-100
+    total_files: int = 0
+    processed_files: int = 0
+    filename: str | None = None
+    error: str | None = None
+    started_at: datetime = field(default_factory=datetime.now)
+    completed_at: datetime | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "backup_id": self.backup_id,
+            "status": self.status,
+            "progress": self.progress,
+            "total_files": self.total_files,
+            "processed_files": self.processed_files,
+            "filename": self.filename,
+            "error": self.error,
+        }
+
+
+_active_backup: BackupStatus | None = None
+_backup_task: asyncio.Task | None = None
+_backup_file_path: Path | None = None
+
+
+def get_active_backup() -> BackupStatus | None:
+    """Get the current backup status."""
+    return _active_backup
+
+
+def is_backup_running() -> bool:
+    """Check if a backup is currently running."""
+    return _backup_task is not None and not _backup_task.done()
+
+
+async def _run_backup(settings: Settings) -> None:
+    """Run backup in background thread."""
+    global _active_backup, _backup_file_path
+    import zipfile
+    import tempfile
+    import json
+    from pika import __version__
+
+    if _active_backup is None:
+        return
+
+    try:
+        data_dir = Path(settings.chroma_persist_dir).parent
+        docs_dir = Path(settings.documents_dir)
+        chroma_dir = Path(settings.chroma_persist_dir)
+
+        # Count total files for progress
+        total_files = 0
+        if docs_dir.exists():
+            total_files += sum(1 for _ in docs_dir.rglob("*") if _.is_file())
+        if chroma_dir.exists():
+            total_files += sum(1 for _ in chroma_dir.rglob("*") if _.is_file())
+        # Add config files
+        total_files += 6  # config, audit, history, feedback, db, metadata
+
+        _active_backup.total_files = total_files
+        _active_backup.status = "running"
+        processed = 0
+
+        # Create temp file for the backup
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_dir = data_dir / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_dir / f"pika_backup_{timestamp}.zip"
+        _backup_file_path = backup_path
+
+        def update_progress():
+            nonlocal processed
+            processed += 1
+            _active_backup.processed_files = processed
+            _active_backup.progress = int((processed / max(total_files, 1)) * 100)
+
+        # Create ZIP file on disk (not in memory)
+        with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Add documents
+            if docs_dir.exists():
+                for file_path in docs_dir.rglob("*"):
+                    if file_path.is_file():
+                        arcname = f"documents/{file_path.relative_to(docs_dir)}"
+                        zf.write(file_path, arcname)
+                        update_progress()
+                        await asyncio.sleep(0)  # Yield to event loop
+
+            # Add ChromaDB data
+            if chroma_dir.exists():
+                for file_path in chroma_dir.rglob("*"):
+                    if file_path.is_file():
+                        arcname = f"chroma/{file_path.relative_to(chroma_dir)}"
+                        zf.write(file_path, arcname)
+                        update_progress()
+                        await asyncio.sleep(0)  # Yield to event loop
+
+            # Add config files
+            config_path = data_dir / "config.json"
+            if config_path.exists():
+                zf.write(config_path, "config.json")
+            update_progress()
+
+            audit_path = Path(settings.audit_log_path)
+            if audit_path.exists():
+                zf.write(audit_path, "audit.log")
+            update_progress()
+
+            history_path = data_dir / "history.json"
+            if history_path.exists():
+                zf.write(history_path, "history.json")
+            update_progress()
+
+            feedback_path = data_dir / "feedback.json"
+            if feedback_path.exists():
+                zf.write(feedback_path, "feedback.json")
+            update_progress()
+
+            db_path = data_dir / "pika.db"
+            if db_path.exists():
+                zf.write(db_path, "pika.db")
+            update_progress()
+
+            # Add metadata
+            metadata = {
+                "version": __version__,
+                "created_at": datetime.now().isoformat(),
+                "includes": {
+                    "documents": docs_dir.exists(),
+                    "chroma": chroma_dir.exists(),
+                    "config": config_path.exists(),
+                    "database": db_path.exists(),
+                    "history": history_path.exists(),
+                    "feedback": feedback_path.exists(),
+                }
+            }
+            zf.writestr("backup_meta.json", json.dumps(metadata, indent=2))
+            update_progress()
+
+        _active_backup.status = "completed"
+        _active_backup.progress = 100
+        _active_backup.filename = backup_path.name
+        _active_backup.completed_at = datetime.now()
+        logger.info(f"Backup completed: {backup_path}")
+
+    except Exception as e:
+        logger.error(f"Backup failed: {e}")
+        _active_backup.status = "error"
+        _active_backup.error = str(e)
+
+
+@router.post("/admin/backup/start")
+async def start_backup(
     request: Request,
     settings: Settings = Depends(get_settings),
 ):
-    """Download a backup zip containing all PIKA data."""
-    import io
-    import zipfile
-    from datetime import datetime
-
-    from fastapi.responses import StreamingResponse
+    """Start a background backup operation."""
+    global _active_backup, _backup_task
 
     if is_admin_auth_required() and not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Authentication required")
     if is_admin_auth_required() and not is_admin(request):
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    data_dir = Path(settings.chroma_persist_dir).parent
-    docs_dir = Path(settings.documents_dir)
+    if is_backup_running():
+        return {"started": False, "message": "Backup already in progress", "backup": _active_backup.to_dict()}
 
-    # Create zip in memory
-    zip_buffer = io.BytesIO()
+    # Create new backup status
+    backup_id = f"backup-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    _active_backup = BackupStatus(backup_id=backup_id)
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Add documents
-        if docs_dir.exists():
-            for file_path in docs_dir.rglob("*"):
-                if file_path.is_file():
-                    arcname = f"documents/{file_path.relative_to(docs_dir)}"
-                    zf.write(file_path, arcname)
-
-        # Add ChromaDB data
-        chroma_dir = Path(settings.chroma_persist_dir)
-        if chroma_dir.exists():
-            for file_path in chroma_dir.rglob("*"):
-                if file_path.is_file():
-                    arcname = f"chroma/{file_path.relative_to(chroma_dir)}"
-                    zf.write(file_path, arcname)
-
-        # Add config.json
-        config_path = data_dir / "config.json"
-        if config_path.exists():
-            zf.write(config_path, "config.json")
-
-        # Add audit.log
-        audit_path = Path(settings.audit_log_path)
-        if audit_path.exists():
-            zf.write(audit_path, "audit.log")
-
-        # Add history.json
-        history_path = data_dir / "history.json"
-        if history_path.exists():
-            zf.write(history_path, "history.json")
-
-        # Add feedback.json
-        feedback_path = data_dir / "feedback.json"
-        if feedback_path.exists():
-            zf.write(feedback_path, "feedback.json")
-
-        # Add user database
-        db_path = data_dir / "pika.db"
-        if db_path.exists():
-            zf.write(db_path, "pika.db")
-
-        # Add backup metadata
-        import json
-        from pika import __version__
-        metadata = {
-            "version": __version__,
-            "created_at": datetime.now().isoformat(),
-            "includes": {
-                "documents": docs_dir.exists(),
-                "chroma": chroma_dir.exists() if 'chroma_dir' in dir() else Path(settings.chroma_persist_dir).exists(),
-                "config": config_path.exists(),
-                "database": db_path.exists(),
-                "history": history_path.exists(),
-                "feedback": feedback_path.exists(),
-            }
-        }
-        zf.writestr("backup_meta.json", json.dumps(metadata, indent=2))
-
-    zip_buffer.seek(0)
+    # Start background task
+    _backup_task = asyncio.create_task(_run_backup(settings))
 
     # Audit log
     audit = get_audit_logger()
-    audit.log_admin_action("backup_download", {})
+    audit.log_admin_action("backup_started", {"backup_id": backup_id})
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"pika_backup_{timestamp}.zip"
+    return {"started": True, "message": "Backup started", "backup": _active_backup.to_dict()}
 
-    return StreamingResponse(
-        zip_buffer,
+
+@router.get("/admin/backup/status")
+async def get_backup_status(request: Request):
+    """Get the status of the current backup operation."""
+    if is_admin_auth_required() and not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    if _active_backup is None:
+        return {"active": False}
+
+    return {"active": True, "backup": _active_backup.to_dict()}
+
+
+@router.get("/admin/backup/download")
+async def download_backup_file(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Download a completed backup file."""
+    from fastapi.responses import FileResponse
+
+    if is_admin_auth_required() and not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if is_admin_auth_required() and not is_admin(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if _active_backup is None or _active_backup.status != "completed":
+        raise HTTPException(status_code=404, detail="No completed backup available")
+
+    if _backup_file_path is None or not _backup_file_path.exists():
+        raise HTTPException(status_code=404, detail="Backup file not found")
+
+    # Audit log
+    audit = get_audit_logger()
+    audit.log_admin_action("backup_download", {"filename": _active_backup.filename})
+
+    return FileResponse(
+        path=_backup_file_path,
+        filename=_active_backup.filename,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@router.delete("/admin/backup")
+async def clear_backup(request: Request):
+    """Clear the backup status and delete the backup file."""
+    global _active_backup, _backup_file_path
+
+    if is_admin_auth_required() and not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # Delete the backup file if it exists
+    if _backup_file_path and _backup_file_path.exists():
+        try:
+            _backup_file_path.unlink()
+        except Exception as e:
+            logger.warning(f"Failed to delete backup file: {e}")
+
+    _active_backup = None
+    _backup_file_path = None
+
+    return {"status": "cleared"}
+
+
+# Legacy endpoint for direct download (kept for compatibility but now just redirects)
+@router.get("/admin/backup")
+async def download_backup(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+):
+    """Download a backup - redirects to the new async flow if no backup ready."""
+    from fastapi.responses import FileResponse, RedirectResponse
+
+    if is_admin_auth_required() and not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if is_admin_auth_required() and not is_admin(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # If there's a completed backup, serve it
+    if _active_backup and _active_backup.status == "completed" and _backup_file_path and _backup_file_path.exists():
+        audit = get_audit_logger()
+        audit.log_admin_action("backup_download", {"filename": _active_backup.filename})
+        return FileResponse(
+            path=_backup_file_path,
+            filename=_active_backup.filename,
+            media_type="application/zip",
+        )
+
+    # Otherwise, return error suggesting to use the async flow
+    raise HTTPException(
+        status_code=400,
+        detail="No backup ready. Use POST /admin/backup/start to create a backup first."
     )
 
 
