@@ -11,25 +11,65 @@ from pika.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Log rotation settings
+MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_BACKUP_COUNT = 5  # Keep 5 backup files
+
 
 class AuditLogger:
-    """Service for logging audit events to a JSON lines file."""
+    """Service for logging audit events to a JSON lines file with rotation."""
 
     def __init__(self, log_path: Path | None = None):
         settings = get_settings()
         self.log_path = log_path or Path(settings.audit_log_path)
         self._lock = Lock()
+        self._write_count = 0  # Track writes to avoid checking size every time
         self._ensure_log_dir()
 
     def _ensure_log_dir(self) -> None:
         """Ensure the log directory exists."""
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
+    def _rotate_if_needed(self) -> None:
+        """Rotate log file if it exceeds max size."""
+        try:
+            if not self.log_path.exists():
+                return
+
+            if self.log_path.stat().st_size < MAX_LOG_SIZE:
+                return
+
+            # Rotate: audit.log -> audit.log.1 -> audit.log.2 -> ...
+            for i in range(MAX_BACKUP_COUNT - 1, 0, -1):
+                old_path = self.log_path.with_suffix(f".log.{i}")
+                new_path = self.log_path.with_suffix(f".log.{i + 1}")
+                if old_path.exists():
+                    if new_path.exists():
+                        new_path.unlink()
+                    old_path.rename(new_path)
+
+            # Current log -> .log.1
+            backup_path = self.log_path.with_suffix(".log.1")
+            if backup_path.exists():
+                backup_path.unlink()
+            self.log_path.rename(backup_path)
+
+            logger.info(f"[Audit] Rotated log file (exceeded {MAX_LOG_SIZE // (1024*1024)}MB)")
+
+        except Exception as e:
+            logger.error(f"Failed to rotate audit log: {e}")
+
     def _write_log(self, event: dict[str, Any]) -> None:
-        """Write a log event to the file."""
+        """Write a log event to the file with rotation support."""
         event["timestamp"] = datetime.now().isoformat()
         try:
             with self._lock:
+                # Check rotation every 100 writes to avoid stat() overhead
+                self._write_count += 1
+                if self._write_count >= 100:
+                    self._rotate_if_needed()
+                    self._write_count = 0
+
                 with open(self.log_path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(event) + "\n")
         except Exception as e:

@@ -7,10 +7,19 @@ from unittest.mock import patch, MagicMock, AsyncMock
 class TestHealthEndpoint:
     """Tests for the health check endpoint."""
 
-    def test_health_returns_200(self, test_client, mock_ollama_client):
+    def test_health_returns_200(self, test_client, mock_ollama_client, mock_rag_engine):
         """Verify health endpoint returns 200."""
-        with patch("pika.api.routes.get_ollama_client", return_value=mock_ollama_client):
+        from pika.main import app
+        from pika.services.rag import get_rag_engine
+        from pika.services.ollama import get_ollama_client
+
+        # Use FastAPI's dependency override mechanism
+        app.dependency_overrides[get_ollama_client] = lambda: mock_ollama_client
+        app.dependency_overrides[get_rag_engine] = lambda: mock_rag_engine
+        try:
             response = test_client.get("/api/v1/health")
+        finally:
+            app.dependency_overrides.clear()
 
         assert response.status_code == 200
         data = response.json()
@@ -19,13 +28,22 @@ class TestHealthEndpoint:
         assert "index" in data
         assert "disk" in data
 
-    def test_health_shows_ollama_disconnected(self, test_client, mock_ollama_client):
+    def test_health_shows_ollama_disconnected(self, test_client, mock_ollama_client, mock_rag_engine):
         """Verify health endpoint shows Ollama disconnection."""
+        from pika.main import app
+        from pika.services.rag import get_rag_engine
+        from pika.services.ollama import get_ollama_client
+
         mock_ollama_client.health_check = AsyncMock(return_value=False)
         mock_ollama_client.list_models = AsyncMock(return_value=[])
 
-        with patch("pika.api.routes.get_ollama_client", return_value=mock_ollama_client):
+        # Use FastAPI's dependency override mechanism
+        app.dependency_overrides[get_ollama_client] = lambda: mock_ollama_client
+        app.dependency_overrides[get_rag_engine] = lambda: mock_rag_engine
+        try:
             response = test_client.get("/api/v1/health")
+        finally:
+            app.dependency_overrides.clear()
 
         assert response.status_code == 200
         data = response.json()

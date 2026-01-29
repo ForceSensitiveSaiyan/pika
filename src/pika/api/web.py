@@ -43,11 +43,16 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _sessions: dict[str, dict] = {}
 _sessions_lock = Lock()
 SESSION_MAX_AGE = 86400  # 24 hours in seconds
+SESSION_CLEANUP_INTERVAL = 300  # Run cleanup every 5 minutes
 
 # CSRF token storage (maps token -> session_id for validation)
 _csrf_tokens: dict[str, tuple[str, float]] = {}  # token -> (session_id, created_at)
 _csrf_lock = Lock()
 CSRF_TOKEN_MAX_AGE = 3600  # 1 hour
+
+# Background cleanup task
+_session_cleanup_task = None
+_session_cleanup_stop = None
 
 
 def hash_password(password: str) -> str:
@@ -72,8 +77,8 @@ def verify_hashed_password(password: str, hashed: str) -> bool:
         return False
 
 
-def _cleanup_expired_sessions() -> None:
-    """Remove expired sessions. Called periodically."""
+def _cleanup_expired_sessions() -> int:
+    """Remove expired sessions. Returns count of cleaned sessions."""
     current_time = time.time()
     expired = [
         sid for sid, data in _sessions.items()
@@ -81,6 +86,77 @@ def _cleanup_expired_sessions() -> None:
     ]
     for sid in expired:
         del _sessions[sid]
+    return len(expired)
+
+
+def _cleanup_expired_csrf_tokens() -> int:
+    """Remove expired CSRF tokens. Returns count of cleaned tokens."""
+    current_time = time.time()
+    expired = [
+        token for token, (_, created_at) in _csrf_tokens.items()
+        if current_time - created_at > CSRF_TOKEN_MAX_AGE
+    ]
+    for token in expired:
+        del _csrf_tokens[token]
+    return len(expired)
+
+
+async def _session_cleanup_loop() -> None:
+    """Background task that periodically cleans up expired sessions and tokens."""
+    import asyncio
+    logger.info("[Sessions] Background cleanup task started")
+
+    while True:
+        try:
+            # Check for stop signal
+            if _session_cleanup_stop and _session_cleanup_stop.is_set():
+                break
+
+            # Run cleanup
+            with _sessions_lock:
+                sessions_cleaned = _cleanup_expired_sessions()
+            with _csrf_lock:
+                tokens_cleaned = _cleanup_expired_csrf_tokens()
+
+            if sessions_cleaned or tokens_cleaned:
+                logger.debug(f"[Sessions] Cleaned up {sessions_cleaned} sessions, {tokens_cleaned} CSRF tokens")
+
+            await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"[Sessions] Cleanup error: {e}")
+            await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
+
+    logger.info("[Sessions] Background cleanup task stopped")
+
+
+async def init_session_cleanup() -> None:
+    """Initialize the background session cleanup task."""
+    import asyncio
+    global _session_cleanup_task, _session_cleanup_stop
+
+    _session_cleanup_stop = asyncio.Event()
+    _session_cleanup_task = asyncio.create_task(_session_cleanup_loop())
+
+
+async def shutdown_session_cleanup() -> None:
+    """Shutdown the background session cleanup task."""
+    global _session_cleanup_task, _session_cleanup_stop
+
+    if _session_cleanup_stop:
+        _session_cleanup_stop.set()
+
+    if _session_cleanup_task:
+        _session_cleanup_task.cancel()
+        try:
+            await _session_cleanup_task
+        except Exception:
+            pass
+        _session_cleanup_task = None
+
+    logger.info("[Sessions] Cleanup task shutdown complete")
 
 
 def create_session(user_data: dict) -> str:
@@ -512,6 +588,34 @@ async def list_documents(
     ]
 
 
+def _sanitize_filename(filename: str) -> str:
+    """Sanitize a filename to prevent path traversal attacks.
+
+    Returns the basename only, stripping any directory components.
+    Raises ValueError if filename is invalid.
+    """
+    # Get just the filename, no path components
+    safe_name = Path(filename).name
+
+    # Reject empty names
+    if not safe_name:
+        raise ValueError("Empty filename")
+
+    # Reject hidden files (starting with .)
+    if safe_name.startswith("."):
+        raise ValueError("Hidden files not allowed")
+
+    # Reject path traversal attempts
+    if ".." in safe_name or "/" in safe_name or "\\" in safe_name:
+        raise ValueError("Invalid filename characters")
+
+    # Reject null bytes
+    if "\x00" in safe_name:
+        raise ValueError("Invalid filename")
+
+    return safe_name
+
+
 @router.post("/upload")
 async def upload_document(
     file: UploadFile,
@@ -522,7 +626,12 @@ async def upload_document(
     if file.filename is None:
         raise HTTPException(status_code=400, detail="Filename required")
 
-    filename = file.filename
+    # Sanitize filename to prevent path traversal
+    try:
+        filename = _sanitize_filename(file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
+
     # Validate file extension
     allowed_extensions = {".pdf", ".docx", ".txt", ".md"}
     file_ext = Path(filename).suffix.lower()

@@ -189,6 +189,22 @@
                             </tr>
                         </tbody>
                     </table>
+                    <!-- Pagination -->
+                    <div class="pagination" id="doc-pagination" style="display: none;">
+                        <button class="btn btn-secondary btn-sm" id="doc-prev-btn" onclick="prevDocPage()" disabled>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="15 18 9 12 15 6"></polyline>
+                            </svg>
+                            Prev
+                        </button>
+                        <span class="pagination-info" id="doc-pagination-info">Page 1 of 1</span>
+                        <button class="btn btn-secondary btn-sm" id="doc-next-btn" onclick="nextDocPage()" disabled>
+                            Next
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="9 18 15 12 9 6"></polyline>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Stats -->
@@ -326,6 +342,13 @@
     }
 
     let pullPollingInterval = null;
+
+    // Document pagination state
+    const DOCS_PER_PAGE = 25;
+    let allDocuments = [];
+    let indexedMap = {};
+    let currentDocPage = 1;
+    let totalDocPages = 1;
 
     // Initialize
     document.addEventListener('DOMContentLoaded', async () => {
@@ -611,10 +634,12 @@
         /**
          * Combined function to load documents and stats in optimized API calls.
          * Uses /api/v1/index/info for cached stats+indexed docs (single call).
+         * Implements client-side pagination for large document lists.
          */
         const tbody = document.getElementById('document-tbody');
         const docCount = document.getElementById('doc-count');
         const chunkCount = document.getElementById('chunk-count');
+        const pagination = document.getElementById('doc-pagination');
 
         try {
             // Fetch file list and index info in parallel
@@ -631,33 +656,21 @@
             chunkCount.textContent = indexInfo.total_chunks;
 
             // Build indexed map from combined response
-            const indexedMap = {};
+            indexedMap = {};
             indexInfo.documents.forEach(d => indexedMap[d.filename] = d.chunk_count);
 
-            if (documents.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="4" class="empty-state">No documents uploaded yet</td>
-                    </tr>
-                `;
-                return;
+            // Store documents for pagination
+            allDocuments = documents;
+            totalDocPages = Math.ceil(documents.length / DOCS_PER_PAGE) || 1;
+
+            // Reset to page 1 if current page is out of bounds
+            if (currentDocPage > totalDocPages) {
+                currentDocPage = 1;
             }
 
-            tbody.innerHTML = documents.map(doc => `
-                <tr>
-                    <td class="doc-name" title="${doc.filename}">${doc.filename}</td>
-                    <td class="doc-meta">${formatSize(doc.size_bytes)}</td>
-                    <td class="doc-meta">${indexedMap[doc.filename] || '—'}</td>
-                    <td class="doc-actions">
-                        <button class="btn btn-icon btn-danger" onclick="deleteDocument('${doc.filename}')" title="Delete">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <polyline points="3 6 5 6 21 6"></polyline>
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                            </svg>
-                        </button>
-                    </td>
-                </tr>
-            `).join('');
+            // Render current page
+            renderDocumentPage();
+
         } catch (error) {
             console.error('Failed to load documents:', error);
             tbody.innerHTML = `
@@ -665,8 +678,73 @@
                     <td colspan="4" class="empty-state">Failed to load documents</td>
                 </tr>
             `;
+            pagination.style.display = 'none';
             docCount.textContent = '0';
             chunkCount.textContent = '0';
+        }
+    }
+
+    function renderDocumentPage() {
+        const tbody = document.getElementById('document-tbody');
+        const pagination = document.getElementById('doc-pagination');
+        const paginationInfo = document.getElementById('doc-pagination-info');
+        const prevBtn = document.getElementById('doc-prev-btn');
+        const nextBtn = document.getElementById('doc-next-btn');
+
+        if (allDocuments.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="4" class="empty-state">No documents uploaded yet</td>
+                </tr>
+            `;
+            pagination.style.display = 'none';
+            return;
+        }
+
+        // Calculate page bounds
+        const startIdx = (currentDocPage - 1) * DOCS_PER_PAGE;
+        const endIdx = Math.min(startIdx + DOCS_PER_PAGE, allDocuments.length);
+        const pageDocuments = allDocuments.slice(startIdx, endIdx);
+
+        // Render documents for current page
+        tbody.innerHTML = pageDocuments.map(doc => `
+            <tr>
+                <td class="doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.filename)}</td>
+                <td class="doc-meta">${formatSize(doc.size_bytes)}</td>
+                <td class="doc-meta">${indexedMap[doc.filename] || '—'}</td>
+                <td class="doc-actions">
+                    <button class="btn btn-icon btn-danger" onclick="deleteDocument('${escapeHtml(doc.filename)}')" title="Delete">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+
+        // Update pagination controls
+        if (totalDocPages > 1) {
+            pagination.style.display = 'flex';
+            paginationInfo.textContent = `Page ${currentDocPage} of ${totalDocPages} (${allDocuments.length} docs)`;
+            prevBtn.disabled = currentDocPage <= 1;
+            nextBtn.disabled = currentDocPage >= totalDocPages;
+        } else {
+            pagination.style.display = 'none';
+        }
+    }
+
+    function prevDocPage() {
+        if (currentDocPage > 1) {
+            currentDocPage--;
+            renderDocumentPage();
+        }
+    }
+
+    function nextDocPage() {
+        if (currentDocPage < totalDocPages) {
+            currentDocPage++;
+            renderDocumentPage();
         }
     }
 

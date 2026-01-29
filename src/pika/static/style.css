@@ -1012,6 +1012,30 @@ body {
     transition: opacity var(--transition-fast);
 }
 
+/* Pagination */
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--border);
+    background: var(--bg-tertiary);
+}
+
+.pagination-info {
+    font-size: 13px;
+    color: var(--text-secondary);
+    min-width: 150px;
+    text-align: center;
+}
+
+.pagination .btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+}
+
 .empty-state {
     padding: var(--space-8);
     text-align: center;
@@ -1956,4 +1980,45 @@ body {
 
 [data-theme="dark"] .theme-toggle .icon-moon {
     display: none;
+}
+
+/* ============================================
+   Site Footer - Discreet Attribution
+   ============================================ */
+
+.site-footer {
+    position: fixed;
+    bottom: var(--space-3);
+    left: var(--space-4);
+    z-index: 50;
+}
+
+.site-footer a {
+    font-size: 11px;
+    color: rgba(0, 0, 0, 0.35);
+    text-decoration: none;
+    letter-spacing: 0.01em;
+    transition: color var(--transition-fast);
+}
+
+.site-footer a:hover {
+    color: rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="dark"] .site-footer a {
+    color: rgba(255, 255, 255, 0.35);
+}
+
+[data-theme="dark"] .site-footer a:hover {
+    color: rgba(255, 255, 255, 0.55);
+}
+
+/* Mobile: static positioning so footer flows with content */
+@media (max-width: 768px) {
+    .site-footer {
+        position: static;
+        margin-top: auto; /* Push to bottom of flex container */
+        padding: var(--space-4);
+        text-align: center;
+    }
 }

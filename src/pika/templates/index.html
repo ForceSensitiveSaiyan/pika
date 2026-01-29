@@ -321,6 +321,40 @@
         return date.toLocaleDateString();
     }
 
+    function formatWaitTime(seconds) {
+        if (seconds < 60) return `${seconds}s`;
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        if (mins < 60) return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+        const hours = Math.floor(mins / 60);
+        const remainMins = mins % 60;
+        return `${hours}h ${remainMins}m`;
+    }
+
+    function updateLoadingMessage(status) {
+        if (!currentLoadingId) return;
+        const loadingEl = document.getElementById(currentLoadingId);
+        if (!loadingEl) return;
+
+        const contentEl = loadingEl.querySelector('.message-content');
+        if (!contentEl) return;
+
+        if (status.status === 'queued') {
+            const position = status.queue_position || 1;
+            const queueLength = status.queue_length || 1;
+            const waitTime = status.estimated_wait_seconds;
+            let message = `Queued (position ${position} of ${queueLength})`;
+            if (waitTime !== null && waitTime !== undefined) {
+                message += ` - estimated wait: ${formatWaitTime(waitTime)}`;
+            }
+            contentEl.textContent = message;
+            contentEl.classList.remove('loading-dots');
+        } else if (status.status === 'running') {
+            contentEl.textContent = 'Thinking';
+            contentEl.classList.add('loading-dots');
+        }
+    }
+
     // ==================== Query Status ====================
 
     async function checkActiveQuery() {
@@ -328,7 +362,7 @@
             const response = await fetch('/api/v1/query/status');
             const status = await response.json();
 
-            if (status.status === 'running') {
+            if (status.status === 'running' || status.status === 'queued') {
                 isLoading = true;
                 updateSendButton();
                 currentQueryId = status.query_id;
@@ -346,7 +380,14 @@
                     saveChatHistory();
                 }
 
-                currentLoadingId = addMessage('Thinking', 'assistant', true);
+                // Show appropriate loading message based on status
+                const loadingText = status.status === 'queued'
+                    ? `Queued (position ${status.queue_position || 1} of ${status.queue_length || 1})`
+                    : 'Thinking';
+                currentLoadingId = addMessage(loadingText, 'assistant', true);
+                if (status.status === 'queued') {
+                    updateLoadingMessage(status);
+                }
                 startQueryPolling();
             } else if (status.status === 'completed' && status.result) {
                 const welcome = document.getElementById('welcome');
@@ -436,6 +477,10 @@
                         updateSendButton();
                         await fetch('/api/v1/query/status', { method: 'DELETE' });
                     }
+
+                } else if (status.status === 'queued' || status.status === 'running') {
+                    // Update loading message with queue position or running status
+                    updateLoadingMessage(status);
 
                 } else if (status.status === 'none' && isLoading) {
                     // Stale query detection: backend has no query but frontend thinks one is running
@@ -570,6 +615,12 @@
             }
 
             currentQueryId = result.query_id;
+
+            // Update loading message if queued
+            if (result.status === 'queued') {
+                updateLoadingMessage(result);
+            }
+
             startQueryPolling();
 
         } catch (error) {

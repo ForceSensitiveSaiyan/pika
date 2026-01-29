@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -29,6 +30,10 @@ logger = logging.getLogger(__name__)
 # Cache TTL in seconds
 STATS_CACHE_TTL = 60  # 1 minute cache for stats
 DOCS_CACHE_TTL = 60   # 1 minute cache for indexed documents list
+
+# Query status cleanup settings
+QUERY_STATUS_TTL = 300  # 5 minutes - completed queries are cleaned up after this
+QUERY_CLEANUP_INTERVAL = 60  # Run cleanup every 60 seconds
 
 
 class Confidence(str, Enum):
@@ -77,15 +82,55 @@ class IndexedDocument:
 
 
 @dataclass
+class QueuedQuery:
+    """A query waiting in the queue."""
+
+    query_id: str
+    question: str
+    username: str | None
+    top_k: int | None
+    queued_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class QueueStats:
+    """Statistics for estimating wait times."""
+
+    recent_durations: list[float] = field(default_factory=list)
+    max_samples: int = 10
+
+    def record_duration(self, duration: float) -> None:
+        """Record a query duration for averaging."""
+        self.recent_durations.append(duration)
+        if len(self.recent_durations) > self.max_samples:
+            self.recent_durations.pop(0)
+
+    def get_average_duration(self) -> float:
+        """Get average query duration, default 30s if no data."""
+        if not self.recent_durations:
+            return 30.0  # Default estimate
+        return sum(self.recent_durations) / len(self.recent_durations)
+
+
+@dataclass
 class QueryStatus:
     """Status of an active or completed query."""
 
     query_id: str
     question: str
-    status: str = "pending"  # pending, running, completed, error
+    status: str = "pending"  # pending, queued, running, completed, error, cancelled
     result: "QueryResult | None" = None
     error: str | None = None
     started_at: datetime = field(default_factory=datetime.now)
+    completed_at: datetime | None = None  # Set when query finishes (for TTL cleanup)
+    # Queue-related fields
+    queue_position: int | None = None
+    queue_length: int | None = None
+    estimated_wait_seconds: int | None = None
+
+    def mark_completed(self) -> None:
+        """Mark the query as completed and set completion time."""
+        self.completed_at = datetime.now()
 
     def to_dict(self) -> dict:
         result_dict = None
@@ -109,6 +154,9 @@ class QueryStatus:
             "status": self.status,
             "result": result_dict,
             "error": self.error,
+            "queue_position": self.queue_position,
+            "queue_length": self.queue_length,
+            "estimated_wait_seconds": self.estimated_wait_seconds,
         }
 
 
@@ -118,6 +166,14 @@ _query_tasks: dict[str, asyncio.Task] = {}
 
 # Key for anonymous users
 ANONYMOUS_USER = "__anonymous__"
+
+# Global query queue state
+_query_queue: deque[QueuedQuery] = deque()
+_queue_lock = asyncio.Lock()
+_running_queries: set[str] = set()  # Set of query_ids currently running
+_queue_stats = QueueStats()
+_queue_processor_task: asyncio.Task | None = None
+_queue_shutdown_event: asyncio.Event | None = None
 
 
 def _get_user_key(username: str | None) -> str:
@@ -146,6 +202,311 @@ def _set_query_status(status: QueryStatus | None, username: str | None = None) -
             del _active_queries[key]
     else:
         _active_queries[key] = status
+
+
+def cleanup_expired_queries() -> int:
+    """Remove completed/errored queries older than TTL.
+
+    Returns the number of queries cleaned up.
+    """
+    now = datetime.now()
+    expired_keys = []
+
+    for key, status in _active_queries.items():
+        # Only clean up terminal states
+        if status.status in ("completed", "error", "cancelled"):
+            if status.completed_at:
+                age = (now - status.completed_at).total_seconds()
+                if age > QUERY_STATUS_TTL:
+                    expired_keys.append(key)
+            else:
+                # No completed_at set but in terminal state - use started_at as fallback
+                age = (now - status.started_at).total_seconds()
+                if age > QUERY_STATUS_TTL * 2:  # More lenient for legacy entries
+                    expired_keys.append(key)
+
+    for key in expired_keys:
+        del _active_queries[key]
+        if key in _query_tasks:
+            del _query_tasks[key]
+
+    if expired_keys:
+        logger.debug(f"[Queue] Cleaned up {len(expired_keys)} expired query statuses")
+
+    return len(expired_keys)
+
+
+# ==================== Queue Management ====================
+
+
+def get_queue_length() -> int:
+    """Get current queue length."""
+    return len(_query_queue)
+
+
+def get_running_count() -> int:
+    """Get number of currently running queries."""
+    return len(_running_queries)
+
+
+def get_user_queued_count(username: str | None) -> int:
+    """Count queries in queue for a specific user."""
+    key = _get_user_key(username)
+    return sum(1 for q in _query_queue if _get_user_key(q.username) == key)
+
+
+def _update_queue_positions() -> None:
+    """Recalculate queue positions for all queued queries."""
+    settings = get_settings()
+    avg_duration = _queue_stats.get_average_duration()
+    running_count = len(_running_queries)
+    max_concurrent = settings.max_concurrent_queries
+
+    for i, queued in enumerate(_query_queue):
+        key = _get_user_key(queued.username)
+        status = _active_queries.get(key)
+        if status and status.query_id == queued.query_id and status.status == "queued":
+            position = i + 1
+            queue_length = len(_query_queue)
+
+            # Estimate wait: queries ahead / concurrent slots * avg duration
+            # Plus consider currently running queries
+            queries_ahead = i
+            if running_count >= max_concurrent:
+                # All slots full, need to wait for current queries + queue position
+                estimated_wait = int((queries_ahead + 1) * avg_duration / max_concurrent)
+            else:
+                # Some slots available, might start soon
+                estimated_wait = int(queries_ahead * avg_duration / max_concurrent)
+
+            status.queue_position = position
+            status.queue_length = queue_length
+            status.estimated_wait_seconds = estimated_wait
+
+
+def remove_from_queue(query_id: str) -> bool:
+    """Remove a query from the queue (for cancellation).
+
+    Returns True if query was found and removed.
+    """
+    # Find and remove the query
+    found_idx = None
+    for i, queued in enumerate(_query_queue):
+        if queued.query_id == query_id:
+            found_idx = i
+            break
+
+    if found_idx is not None:
+        # Rebuild queue without the removed item
+        items = list(_query_queue)
+        _query_queue.clear()
+        for i, item in enumerate(items):
+            if i != found_idx:
+                _query_queue.append(item)
+        logger.info(f"Removed query {query_id} from queue position {found_idx + 1}")
+        _update_queue_positions()
+        return True
+    return False
+
+
+async def _execute_query(queued: QueuedQuery) -> None:
+    """Execute a single query from the queue."""
+    import time as time_module
+
+    # Import here to avoid circular import
+    from pika.services.audit import get_audit_logger
+    from pika.services.app_config import get_app_config
+    from pika.services.history import get_history_service
+
+    key = _get_user_key(queued.username)
+    status = _active_queries.get(key)
+
+    if not status or status.query_id != queued.query_id:
+        # Query was cancelled or replaced
+        logger.info(f"Query {queued.query_id} no longer active, skipping execution")
+        return
+
+    # Update status to running
+    status.status = "running"
+    status.queue_position = None
+    status.queue_length = None
+    status.estimated_wait_seconds = None
+
+    query_start = time_module.time()
+    logger.info(f"[Queue] Executing query {queued.query_id}: '{queued.question[:50]}...'")
+
+    try:
+        rag = get_rag_engine()
+        settings = get_settings()
+        timeout = settings.queue_timeout
+
+        result = await asyncio.wait_for(
+            rag.query(question=queued.question, top_k=queued.top_k),
+            timeout=timeout,
+        )
+        status.result = result
+        status.status = "completed"
+        status.mark_completed()
+        elapsed = time_module.time() - query_start
+
+        # Record duration for wait estimation
+        _queue_stats.record_duration(elapsed)
+
+        logger.info(f"[Queue] Query completed: {queued.query_id} in {elapsed:.1f}s")
+
+        # Audit log
+        audit = get_audit_logger()
+        audit.log_query(
+            question=queued.question,
+            model=get_app_config().get_current_model(),
+            confidence=result.confidence.value,
+            sources=[s.filename for s in result.sources],
+        )
+
+        # Save to history
+        history = get_history_service()
+        history.add_query(
+            question=queued.question,
+            answer=result.answer,
+            confidence=result.confidence.value,
+            sources=[s.filename for s in result.sources],
+            username=queued.username,
+        )
+
+    except asyncio.CancelledError:
+        elapsed = time_module.time() - query_start
+        status.status = "cancelled"
+        status.error = "Query was cancelled"
+        status.mark_completed()
+        logger.info(f"[Queue] Query cancelled: {queued.query_id} after {elapsed:.1f}s")
+
+    except asyncio.TimeoutError:
+        elapsed = time_module.time() - query_start
+        status.status = "error"
+        status.error = f"Query timed out after {get_settings().queue_timeout} seconds"
+        status.mark_completed()
+        logger.error(f"[Queue] Query timed out: {queued.query_id} after {elapsed:.1f}s")
+
+        audit = get_audit_logger()
+        audit.log_query(
+            question=queued.question,
+            model=get_app_config().get_current_model(),
+            confidence="none",
+            sources=[],
+            error="Query timed out",
+        )
+
+    except Exception as e:
+        elapsed = time_module.time() - query_start
+        status.status = "error"
+        status.error = f"{type(e).__name__}: {e}"  # Include error type for debugging
+        status.mark_completed()
+        logger.error(f"[Queue] Query failed: {queued.query_id} after {elapsed:.1f}s - {type(e).__name__}: {e}")
+
+        audit = get_audit_logger()
+        audit.log_query(
+            question=queued.question,
+            model=get_app_config().get_current_model(),
+            confidence="none",
+            sources=[],
+            error=str(e),
+        )
+
+
+async def _process_queue() -> None:
+    """Background coroutine that processes queued queries."""
+    global _queue_shutdown_event
+
+    logger.info("[Queue] Queue processor started")
+    settings = get_settings()
+    last_cleanup_time = time.time()
+
+    while True:
+        # Check for shutdown
+        if _queue_shutdown_event and _queue_shutdown_event.is_set():
+            logger.info("[Queue] Shutdown signal received, stopping processor")
+            break
+
+        try:
+            # Periodic cleanup of expired query statuses
+            if time.time() - last_cleanup_time > QUERY_CLEANUP_INTERVAL:
+                cleanup_expired_queries()
+                last_cleanup_time = time.time()
+
+            async with _queue_lock:
+                # Check if we can start more queries
+                if len(_running_queries) >= settings.max_concurrent_queries:
+                    # All slots full, wait
+                    pass
+                elif _query_queue:
+                    # Get next query from queue
+                    queued = _query_queue.popleft()
+
+                    # Check for timeout
+                    wait_time = (datetime.now() - queued.queued_at).total_seconds()
+                    if wait_time > settings.queue_timeout:
+                        # Query timed out while waiting
+                        key = _get_user_key(queued.username)
+                        status = _active_queries.get(key)
+                        if status and status.query_id == queued.query_id:
+                            status.status = "error"
+                            status.error = f"Query timed out after waiting {int(wait_time)} seconds in queue"
+                            status.mark_completed()
+                        logger.warning(f"[Queue] Query {queued.query_id} timed out in queue after {wait_time:.1f}s")
+                        _update_queue_positions()
+                        continue
+
+                    # Track as running
+                    _running_queries.add(queued.query_id)
+                    _update_queue_positions()
+
+                    # Execute in background task
+                    async def run_and_cleanup(q: QueuedQuery):
+                        try:
+                            await _execute_query(q)
+                        finally:
+                            _running_queries.discard(q.query_id)
+
+                    asyncio.create_task(run_and_cleanup(queued))
+
+            # Small sleep to prevent busy loop
+            await asyncio.sleep(0.1)
+
+        except asyncio.CancelledError:
+            logger.info("[Queue] Queue processor cancelled")
+            break
+        except Exception as e:
+            logger.error(f"[Queue] Queue processor error: {e}")
+            await asyncio.sleep(1)  # Back off on error
+
+    logger.info("[Queue] Queue processor stopped")
+
+
+async def init_queue_processor() -> None:
+    """Initialize and start the queue processor."""
+    global _queue_processor_task, _queue_shutdown_event
+
+    _queue_shutdown_event = asyncio.Event()
+    _queue_processor_task = asyncio.create_task(_process_queue())
+    logger.info("[Queue] Queue processor initialized")
+
+
+async def shutdown_queue_processor() -> None:
+    """Shutdown the queue processor gracefully."""
+    global _queue_processor_task, _queue_shutdown_event
+
+    if _queue_shutdown_event:
+        _queue_shutdown_event.set()
+
+    if _queue_processor_task:
+        _queue_processor_task.cancel()
+        try:
+            await _queue_processor_task
+        except asyncio.CancelledError:
+            pass
+        _queue_processor_task = None
+
+    logger.info("[Queue] Queue processor shutdown complete")
 
 
 @dataclass
@@ -396,14 +757,21 @@ class RAGEngine:
         # Initialize embedding model
         self._embedding_model: SentenceTransformer | None = None
 
-        # Initialize ChromaDB
+        # Initialize ChromaDB with error handling
         persist_dir = Path(self.settings.chroma_persist_dir)
         persist_dir.mkdir(parents=True, exist_ok=True)
 
-        self.chroma_client = chromadb.PersistentClient(
-            path=str(persist_dir),
-            settings=ChromaSettings(anonymized_telemetry=False),
-        )
+        try:
+            self.chroma_client = chromadb.PersistentClient(
+                path=str(persist_dir),
+                settings=ChromaSettings(anonymized_telemetry=False),
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize ChromaDB: {e}")
+            raise RuntimeError(
+                f"Failed to initialize vector database at {persist_dir}. "
+                f"Check permissions and disk space. Error: {e}"
+            ) from e
 
         self._collection = None
 
@@ -418,13 +786,31 @@ class RAGEngine:
     def embedding_model(self) -> SentenceTransformer:
         """Lazy-load the embedding model."""
         if self._embedding_model is None:
-            import time as time_module
-            load_start = time_module.time()
-            logger.info(f"[RAG] Loading embedding model: {self.settings.embedding_model}...")
+            self._load_embedding_model()
+        return self._embedding_model
+
+    def _load_embedding_model(self) -> None:
+        """Load the embedding model (can be called during startup or lazily)."""
+        if self._embedding_model is not None:
+            return  # Already loaded
+
+        import time as time_module
+        load_start = time_module.time()
+        logger.info(f"[RAG] Loading embedding model: {self.settings.embedding_model}...")
+        try:
             self._embedding_model = SentenceTransformer(self.settings.embedding_model)
             load_elapsed = time_module.time() - load_start
             logger.info(f"[RAG] Embedding model loaded in {load_elapsed:.1f}s")
-        return self._embedding_model
+        except Exception as e:
+            logger.error(f"[RAG] Failed to load embedding model: {e}")
+            raise RuntimeError(
+                f"Failed to load embedding model '{self.settings.embedding_model}'. "
+                f"Error: {e}"
+            ) from e
+
+    def preload(self) -> None:
+        """Pre-load the embedding model. Call during startup to avoid first-query latency."""
+        self._load_embedding_model()
 
     @property
     def collection(self):
@@ -881,6 +1267,25 @@ def get_rag_engine() -> RAGEngine:
     return _rag_engine
 
 
+async def preload_embedding_model() -> None:
+    """Pre-load the embedding model during app startup.
+
+    This avoids latency on the first query by loading the model in advance.
+    Runs in a thread pool to avoid blocking the event loop.
+    """
+    import asyncio
+
+    def _load():
+        try:
+            engine = get_rag_engine()
+            engine.preload()
+        except Exception as e:
+            logger.error(f"Failed to preload embedding model: {e}")
+            # Don't raise - app can still start, model will load on first query
+
+    await asyncio.get_event_loop().run_in_executor(None, _load)
+
+
 def is_query_running(username: str | None = None) -> bool:
     """Check if a query task is currently running for a user."""
     key = _get_user_key(username)
@@ -889,26 +1294,56 @@ def is_query_running(username: str | None = None) -> bool:
 
 
 def cancel_query(username: str | None = None) -> bool:
-    """Cancel the currently running query task for a user.
+    """Cancel the currently running or queued query for a user.
 
-    Returns True if a query was cancelled, False if no query was running.
+    Returns True if a query was cancelled, False if no query was found.
     """
     key = _get_user_key(username)
-    task = _query_tasks.get(key)
     query = _active_queries.get(key)
 
-    if task is not None and not task.done():
-        task.cancel()
-        if query:
+    if query is None:
+        return False
+
+    # Check if it's queued
+    if query.status == "queued":
+        # Remove from queue
+        removed = remove_from_queue(query.query_id)
+        if removed:
             query.status = "cancelled"
             query.error = "Query was cancelled by user"
+            logger.info(f"Queued query cancelled by user: {username or 'anonymous'}")
+            return True
+
+    # Check for running task
+    task = _query_tasks.get(key)
+    if task is not None and not task.done():
+        task.cancel()
+        query.status = "cancelled"
+        query.error = "Query was cancelled by user"
+        logger.info(f"Running query cancelled by user: {username or 'anonymous'}")
+        return True
+
+    # Also check if query is tracked as running in queue system
+    if query.query_id in _running_queries:
+        query.status = "cancelled"
+        query.error = "Query was cancelled by user"
+        _running_queries.discard(query.query_id)
         logger.info(f"Query cancelled by user: {username or 'anonymous'}")
         return True
+
     return False
 
 
-# Query timeout in seconds (default 5 minutes)
-QUERY_TIMEOUT = 300
+class QueueFullError(Exception):
+    """Raised when the query queue is full."""
+
+    pass
+
+
+class UserQueueLimitError(Exception):
+    """Raised when user has too many queries in queue."""
+
+    pass
 
 
 async def start_query_task(
@@ -917,88 +1352,82 @@ async def start_query_task(
     top_k: int | None = None,
     username: str | None = None,
 ) -> QueryStatus:
-    """Start a background query task for a specific user."""
-    # Import here to avoid circular import
-    from pika.services.audit import get_audit_logger
-    from pika.services.app_config import get_app_config
-    from pika.services.history import get_history_service
+    """Start or queue a query for a specific user.
 
-    # Create query status
-    query_status = QueryStatus(query_id=query_id, question=question, status="running")
-    _set_query_status(query_status, username)
+    If slots are available, the query runs immediately.
+    Otherwise it's queued with position tracking.
 
-    async def run_query():
-        import time as time_module
-        query_start = time_module.time()
-        logger.info(f"[RAG] Starting query {query_id}: '{question[:50]}...' with timeout={QUERY_TIMEOUT}s")
+    Raises:
+        QueueFullError: If the global queue is full
+        UserQueueLimitError: If user has too many pending queries
+    """
+    settings = get_settings()
 
-        try:
-            rag = get_rag_engine()
-            # Add timeout to prevent queries from running forever
-            result = await asyncio.wait_for(
-                rag.query(question=question, top_k=top_k),
-                timeout=QUERY_TIMEOUT,
-            )
-            query_status.result = result
-            query_status.status = "completed"
-            elapsed = time_module.time() - query_start
-            logger.info(f"[RAG] Query completed: {query_id} in {elapsed:.1f}s")
+    async with _queue_lock:
+        # Check global queue limit
+        if len(_query_queue) >= settings.max_queue_size:
+            raise QueueFullError(f"Queue is full ({settings.max_queue_size} queries)")
 
-            # Audit log
-            audit = get_audit_logger()
-            audit.log_query(
-                question=question,
-                model=get_app_config().get_current_model(),
-                confidence=result.confidence.value,
-                sources=[s.filename for s in result.sources],
+        # Check per-user queue limit
+        user_queued = get_user_queued_count(username)
+        if user_queued >= settings.max_queued_per_user:
+            raise UserQueueLimitError(
+                f"Too many pending queries ({settings.max_queued_per_user} max per user)"
             )
 
-            # Save to history
-            history = get_history_service()
-            history.add_query(
+        # Check if we can run immediately
+        if len(_running_queries) < settings.max_concurrent_queries:
+            # Run immediately
+            query_status = QueryStatus(query_id=query_id, question=question, status="running")
+            _set_query_status(query_status, username)
+
+            # Track as running
+            _running_queries.add(query_id)
+
+            # Create queued query object for execution
+            queued = QueuedQuery(
+                query_id=query_id,
                 question=question,
-                answer=result.answer,
-                confidence=result.confidence.value,
-                sources=[s.filename for s in result.sources],
                 username=username,
+                top_k=top_k,
             )
-        except asyncio.CancelledError:
-            # Query was cancelled by user
-            elapsed = time_module.time() - query_start
-            query_status.status = "cancelled"
-            query_status.error = "Query was cancelled"
-            logger.info(f"[RAG] Query cancelled: {query_id} after {elapsed:.1f}s")
-        except asyncio.TimeoutError:
-            elapsed = time_module.time() - query_start
-            query_status.status = "error"
-            query_status.error = f"Query timed out after {QUERY_TIMEOUT} seconds"
-            logger.error(f"[RAG] Query timed out: {query_id} after {elapsed:.1f}s (limit was {QUERY_TIMEOUT}s)")
 
-            # Audit log timeout
-            audit = get_audit_logger()
-            audit.log_query(
+            # Execute in background
+            async def run_and_cleanup():
+                try:
+                    await _execute_query(queued)
+                finally:
+                    _running_queries.discard(query_id)
+
+            asyncio.create_task(run_and_cleanup())
+            logger.info(f"[Queue] Query {query_id} started immediately (slots: {len(_running_queries)}/{settings.max_concurrent_queries})")
+
+            return query_status
+        else:
+            # Queue the query
+            queued = QueuedQuery(
+                query_id=query_id,
                 question=question,
-                model=get_app_config().get_current_model(),
-                confidence="none",
-                sources=[],
-                error="Query timed out",
+                username=username,
+                top_k=top_k,
             )
-        except Exception as e:
-            elapsed = time_module.time() - query_start
-            query_status.error = str(e)
-            query_status.status = "error"
-            logger.error(f"[RAG] Query failed: {query_id} after {elapsed:.1f}s - {type(e).__name__}: {e}")
+            _query_queue.append(queued)
 
-            # Audit log error
-            audit = get_audit_logger()
-            audit.log_query(
+            # Calculate initial position
+            position = len(_query_queue)
+            avg_duration = _queue_stats.get_average_duration()
+            estimated_wait = int(position * avg_duration / settings.max_concurrent_queries)
+
+            query_status = QueryStatus(
+                query_id=query_id,
                 question=question,
-                model=get_app_config().get_current_model(),
-                confidence="none",
-                sources=[],
-                error=str(e),
+                status="queued",
+                queue_position=position,
+                queue_length=position,
+                estimated_wait_seconds=estimated_wait,
             )
+            _set_query_status(query_status, username)
 
-    key = _get_user_key(username)
-    _query_tasks[key] = asyncio.create_task(run_query())
-    return query_status
+            logger.info(f"[Queue] Query {query_id} queued at position {position} (estimated wait: {estimated_wait}s)")
+
+            return query_status

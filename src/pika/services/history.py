@@ -12,6 +12,7 @@ from pika.config import get_settings
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY_ITEMS = 50
+MAX_FEEDBACK_ITEMS = 500  # Keep more feedback for analytics purposes
 
 
 class HistoryService:
@@ -142,6 +143,11 @@ class HistoryService:
                     return
 
             self._feedback.append(entry)
+
+            # Trim to max size (keep most recent)
+            if len(self._feedback) > MAX_FEEDBACK_ITEMS:
+                self._feedback = self._feedback[-MAX_FEEDBACK_ITEMS:]
+
             self._save_feedback()
 
     def get_feedback(self, limit: int = 100) -> list[dict]:

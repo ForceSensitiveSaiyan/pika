@@ -220,6 +220,35 @@ def _format_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
+# Shared httpx client for connection pooling
+_http_client: httpx.AsyncClient | None = None
+_http_client_lock = asyncio.Lock()
+
+
+async def get_http_client(timeout: float = 30.0) -> httpx.AsyncClient:
+    """Get or create the shared httpx client with connection pooling."""
+    global _http_client
+    async with _http_client_lock:
+        if _http_client is None or _http_client.is_closed:
+            # Create client with connection pooling
+            _http_client = httpx.AsyncClient(
+                timeout=timeout,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+            logger.info("[Ollama] Created shared HTTP client with connection pooling")
+        return _http_client
+
+
+async def close_http_client() -> None:
+    """Close the shared httpx client. Call during app shutdown."""
+    global _http_client
+    async with _http_client_lock:
+        if _http_client is not None and not _http_client.is_closed:
+            await _http_client.aclose()
+            _http_client = None
+            logger.info("[Ollama] Closed shared HTTP client")
+
+
 class OllamaClient:
     """Async client for interacting with Ollama API."""
 
@@ -236,26 +265,26 @@ class OllamaClient:
     async def health_check(self) -> bool:
         """Check if Ollama is running and accessible."""
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                response = await client.get(f"{self.base_url}/api/tags")
-                return response.status_code == 200
+            client = await get_http_client(timeout=5.0)
+            response = await client.get(f"{self.base_url}/api/tags")
+            return response.status_code == 200
         except httpx.RequestError:
             return False
 
     async def list_models(self) -> list[ModelInfo]:
         """List available models in Ollama."""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(f"{self.base_url}/api/tags")
-            response.raise_for_status()
-            data = response.json()
-            models = []
-            for m in data.get("models", []):
-                models.append(ModelInfo(
-                    name=m.get("name", ""),
-                    size=m.get("size", 0),
-                    modified_at=m.get("modified_at", ""),
-                ))
-            return models
+        client = await get_http_client(timeout=self.timeout)
+        response = await client.get(f"{self.base_url}/api/tags")
+        response.raise_for_status()
+        data = response.json()
+        models = []
+        for m in data.get("models", []):
+            models.append(ModelInfo(
+                name=m.get("name", ""),
+                size=m.get("size", 0),
+                modified_at=m.get("modified_at", ""),
+            ))
+        return models
 
     async def pull_model(self, model_name: str) -> AsyncIterator[dict]:
         """Pull a model from Ollama registry, yielding progress updates."""

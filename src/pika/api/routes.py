@@ -27,15 +27,20 @@ from pika.services.ollama import (
 )
 from pika.services.rag import (
     Confidence,
+    QueueFullError,
     RAGEngine,
+    UserQueueLimitError,
     cancel_index_task,
     cancel_query,
     clear_query_status,
     get_active_index,
     get_active_query,
+    get_queue_length,
     get_rag_engine,
+    get_running_count,
     is_indexing_running,
     is_query_running,
+    remove_from_queue,
     start_index_task,
     start_query_task,
 )
@@ -671,6 +676,10 @@ class QueryStartResponse(BaseModel):
 
     query_id: str
     status: str
+    # Queue fields (nullable for backward compatibility)
+    queue_position: int | None = None
+    queue_length: int | None = None
+    estimated_wait_seconds: int | None = None
 
 
 class QueryStatusResponse(BaseModel):
@@ -678,9 +687,13 @@ class QueryStatusResponse(BaseModel):
 
     query_id: str | None
     question: str | None
-    status: str  # pending, running, completed, error, none
+    status: str  # pending, queued, running, completed, error, cancelled, none
     result: QueryResponse | None = None
     error: str | None = None
+    # Queue fields (nullable for backward compatibility)
+    queue_position: int | None = None
+    queue_length: int | None = None
+    estimated_wait_seconds: int | None = None
 
 
 @router.post("/query", response_model=QueryStartResponse)
@@ -690,19 +703,32 @@ async def query_documents(
     query: QueryRequest,
     _: bool = Depends(require_admin_or_api_auth),
 ) -> QueryStartResponse:
-    """Start a background query to the RAG system with rate limiting."""
+    """Start a background query to the RAG system with rate limiting.
+
+    Queries may be queued if concurrency limit is reached.
+    """
     query_id = str(uuid.uuid4())[:8]
     user = get_current_user(request)
     username = user.get("username") if user else None
 
     try:
-        await start_query_task(
+        status = await start_query_task(
             question=query.question,
             query_id=query_id,
             top_k=query.top_k,
             username=username,
         )
-        return QueryStartResponse(query_id=query_id, status="running")
+        return QueryStartResponse(
+            query_id=query_id,
+            status=status.status,
+            queue_position=status.queue_position,
+            queue_length=status.queue_length,
+            estimated_wait_seconds=status.estimated_wait_seconds,
+        )
+    except QueueFullError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except UserQueueLimitError as e:
+        raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         logger.exception(f"Failed to start query: {query.question[:50]}...")
         raise HTTPException(status_code=500, detail=f"Failed to start query: {e}")
@@ -713,7 +739,10 @@ async def get_query_status(
     request: Request,
     _: bool = Depends(require_admin_or_api_auth),
 ) -> QueryStatusResponse:
-    """Get the status of the current or most recent query for the current user."""
+    """Get the status of the current or most recent query for the current user.
+
+    Includes queue position and estimated wait time if queued.
+    """
     user = get_current_user(request)
     username = user.get("username") if user else None
     query = get_active_query(username)
@@ -747,6 +776,9 @@ async def get_query_status(
         status=query.status,
         result=result,
         error=query.error,
+        queue_position=query.queue_position,
+        queue_length=query.queue_length,
+        estimated_wait_seconds=query.estimated_wait_seconds,
     )
 
 
@@ -774,14 +806,16 @@ async def cancel_running_query(
     request: Request,
     _: bool = Depends(require_admin_or_api_auth),
 ) -> CancelQueryResponse:
-    """Cancel the currently running query for the current user."""
+    """Cancel the currently running or queued query for the current user."""
     user = get_current_user(request)
     username = user.get("username") if user else None
 
-    if not is_query_running(username):
+    # Check if there's an active query (running or queued)
+    query = get_active_query(username)
+    if query is None or query.status not in ("running", "queued"):
         return CancelQueryResponse(
             cancelled=False,
-            message="No query is currently running",
+            message="No query is currently running or queued",
         )
 
     cancelled = cancel_query(username)

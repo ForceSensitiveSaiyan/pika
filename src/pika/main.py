@@ -62,6 +62,10 @@ def _rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 async def lifespan(app: FastAPI):
     """Application lifespan handler with graceful shutdown support."""
     global _shutdown_event
+    from pika.services.rag import init_queue_processor, shutdown_queue_processor, preload_embedding_model
+    from pika.api.web import init_session_cleanup, shutdown_session_cleanup
+    from pika.services.ollama import close_http_client
+
     _shutdown_event = asyncio.Event()
 
     # Setup signal handlers for graceful shutdown
@@ -83,10 +87,23 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.app_name} v{__version__}")
     logger.info(f"Ollama URL: {settings.ollama_base_url}")
     logger.info(f"Debug mode: {settings.debug}")
+    logger.info(f"Max concurrent queries: {settings.max_concurrent_queries}")
+
+    # Pre-load embedding model (runs in background to not block startup)
+    asyncio.create_task(preload_embedding_model())
+
+    # Start background tasks
+    await init_queue_processor()
+    await init_session_cleanup()
 
     yield
 
     logger.info("Shutting down PIKA gracefully...")
+    # Shutdown background tasks
+    await shutdown_session_cleanup()
+    await shutdown_queue_processor()
+    # Close HTTP client pool
+    await close_http_client()
     # Allow pending tasks to complete
     await asyncio.sleep(0.5)
 
