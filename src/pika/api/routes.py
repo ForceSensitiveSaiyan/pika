@@ -830,6 +830,53 @@ async def cancel_running_query(
     )
 
 
+@router.post("/query/stream")
+@limiter.limit(lambda: get_settings().rate_limit_query)
+async def query_documents_stream(
+    request: Request,
+    query: QueryRequest,
+    _: bool = Depends(require_admin_or_api_auth),
+    rag: RAGEngine = Depends(get_rag_engine),
+):
+    """Stream a query response using Server-Sent Events.
+
+    Returns an SSE stream with the following event types:
+    - metadata: Contains sources and confidence level
+    - token: Contains a single token of the response
+    - done: Indicates completion with the full answer
+    - error: Contains error message if something went wrong
+    """
+    async def event_generator():
+        try:
+            async for chunk in rag.query_stream(
+                question=query.question,
+                top_k=query.top_k,
+            ):
+                # Format as SSE
+                event_type = chunk.get("type", "token")
+                data = json.dumps(chunk)
+                yield f"event: {event_type}\ndata: {data}\n\n"
+
+                # If done or error, end the stream
+                if event_type in ("done", "error"):
+                    break
+
+        except Exception as e:
+            logger.exception(f"Streaming query error: {e}")
+            error_data = json.dumps({"type": "error", "message": str(e)})
+            yield f"event: error\ndata: {error_data}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
+
+
 # --- History & Feedback Endpoints ---
 
 

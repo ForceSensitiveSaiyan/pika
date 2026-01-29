@@ -577,6 +577,202 @@
 
     // ==================== Send Question ====================
 
+    // Streaming message state
+    let streamingMsgId = null;
+    let streamingContent = '';
+    let streamingSources = [];
+    let streamingConfidence = null;
+
+    function createStreamingMessage() {
+        const container = document.getElementById('chat-messages');
+        const id = 'msg-' + (messageCounter++);
+
+        const div = document.createElement('div');
+        div.id = id;
+        div.className = 'message message-assistant message-streaming';
+        div.innerHTML = `
+            <div class="message-bubble">
+                <div class="message-content streaming-content"></div>
+                <div class="streaming-cursor"></div>
+            </div>
+        `;
+
+        container.appendChild(div);
+        container.scrollTop = container.scrollHeight;
+
+        return id;
+    }
+
+    function updateStreamingMessage(msgId, content) {
+        const msg = document.getElementById(msgId);
+        if (!msg) return;
+
+        const contentEl = msg.querySelector('.streaming-content');
+        if (contentEl) {
+            // Use innerHTML to support markdown-like formatting
+            contentEl.innerHTML = escapeHtml(content);
+        }
+
+        // Auto-scroll
+        const container = document.getElementById('chat-messages');
+        container.scrollTop = container.scrollHeight;
+    }
+
+    function finalizeStreamingMessage(msgId, result, queryId) {
+        const msg = document.getElementById(msgId);
+        if (!msg) return;
+
+        msg.classList.remove('message-streaming');
+
+        // Remove cursor
+        const cursor = msg.querySelector('.streaming-cursor');
+        if (cursor) cursor.remove();
+
+        // Build full message HTML
+        let sourcesHtml = '';
+        if (result.sources && result.sources.length > 0) {
+            const uniqueSources = [...new Set(result.sources.map(s => s.filename))];
+            sourcesHtml = `
+                <div class="message-sources">
+                    <span class="source-label">Sources</span>
+                    ${uniqueSources.map(f => `<span class="source-pill">${escapeHtml(f)}</span>`).join('')}
+                </div>
+            `;
+        }
+
+        const isNoResults = result.confidence === 'none';
+        let noResultsHint = '';
+        if (isNoResults && IS_ADMIN) {
+            noResultsHint = `
+                <div class="no-results-hint">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    Try adding more documents in the <a href="/admin">Admin</a> panel
+                </div>
+            `;
+        }
+
+        const bubble = msg.querySelector('.message-bubble');
+        bubble.innerHTML = `
+            <div class="message-content">${escapeHtml(result.answer)}</div>
+            ${sourcesHtml}
+            ${noResultsHint}
+            <div class="message-confidence confidence-${result.confidence}">
+                <span class="confidence-dot"></span>
+                ${result.confidence} confidence
+            </div>
+            <div class="message-feedback" data-query-id="${queryId}">
+                <span class="feedback-label">Helpful?</span>
+                <button class="feedback-btn" data-rating="up" onclick="submitFeedback('${queryId}', 'up', this)" title="Yes">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
+                    </svg>
+                </button>
+                <button class="feedback-btn" data-rating="down" onclick="submitFeedback('${queryId}', 'down', this)" title="No">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path>
+                    </svg>
+                </button>
+            </div>
+        `;
+    }
+
+    async function sendQuestionStreaming(question) {
+        streamingMsgId = createStreamingMessage();
+        streamingContent = '';
+        streamingSources = [];
+        streamingConfidence = null;
+
+        try {
+            const response = await fetch('/api/v1/query/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Query failed');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                // Parse SSE events from buffer
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+                let eventType = 'message';
+                for (const line of lines) {
+                    if (line.startsWith('event: ')) {
+                        eventType = line.slice(7).trim();
+                    } else if (line.startsWith('data: ')) {
+                        try {
+                            const data = JSON.parse(line.slice(6));
+
+                            if (data.type === 'metadata') {
+                                streamingSources = data.sources || [];
+                                streamingConfidence = data.confidence;
+                            } else if (data.type === 'token') {
+                                streamingContent += data.content;
+                                updateStreamingMessage(streamingMsgId, streamingContent);
+                            } else if (data.type === 'done') {
+                                // Finalize the message
+                                const result = {
+                                    answer: data.answer || streamingContent,
+                                    sources: streamingSources,
+                                    confidence: streamingConfidence || 'medium'
+                                };
+                                const queryId = 'stream-' + Date.now();
+                                finalizeStreamingMessage(streamingMsgId, result, queryId);
+                                chatHistory.push({ type: 'assistant', result, queryId });
+                                saveChatHistory();
+                                return true;
+                            } else if (data.type === 'error') {
+                                throw new Error(data.message || 'Query failed');
+                            }
+                        } catch (parseError) {
+                            console.warn('Failed to parse SSE data:', line, parseError);
+                        }
+                    }
+                }
+            }
+
+            // If we get here without a 'done' event, finalize with what we have
+            if (streamingContent) {
+                const result = {
+                    answer: streamingContent,
+                    sources: streamingSources,
+                    confidence: streamingConfidence || 'medium'
+                };
+                const queryId = 'stream-' + Date.now();
+                finalizeStreamingMessage(streamingMsgId, result, queryId);
+                chatHistory.push({ type: 'assistant', result, queryId });
+                saveChatHistory();
+            }
+
+            return true;
+
+        } catch (error) {
+            // Remove streaming message on error
+            if (streamingMsgId) {
+                removeMessage(streamingMsgId);
+                streamingMsgId = null;
+            }
+            throw error;
+        }
+    }
+
     async function sendQuestion(event) {
         event.preventDefault();
 
@@ -599,6 +795,27 @@
         chatHistory.push({ type: 'user', content: question });
         saveChatHistory();
 
+        // Try streaming first
+        try {
+            await sendQuestionStreaming(question);
+            isLoading = false;
+            updateSendButton();
+            await updateOnboarding();
+            return;
+        } catch (streamError) {
+            console.warn('Streaming failed, falling back to polling:', streamError);
+            // Show error if it's a real error (not just unsupported)
+            if (streamError.message && !streamError.message.includes('fetch')) {
+                addMessage('Error: ' + streamError.message, 'error');
+                chatHistory.push({ type: 'error', content: 'Error: ' + streamError.message });
+                saveChatHistory();
+                isLoading = false;
+                updateSendButton();
+                return;
+            }
+        }
+
+        // Fallback to polling-based query
         currentLoadingId = addMessage('Thinking', 'assistant', true);
 
         try {

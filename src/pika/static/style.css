@@ -2022,3 +2022,145 @@ body {
         text-align: center;
     }
 }
+
+/* ============================================
+   Backup & Restore Section
+   ============================================ */
+
+.backup-restore-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: var(--space-5);
+}
+
+.backup-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.backup-card-icon {
+    width: 48px;
+    height: 48px;
+    background: var(--primary-light);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: var(--space-4);
+}
+
+.backup-card-icon svg {
+    width: 24px;
+    height: 24px;
+    color: var(--primary);
+}
+
+.backup-card-icon-restore {
+    background: var(--warning-bg);
+}
+
+.backup-card-icon-restore svg {
+    color: #d97706;
+}
+
+.backup-card-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--space-2);
+}
+
+.backup-card-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-5);
+    line-height: 1.5;
+}
+
+.backup-card .btn {
+    width: 100%;
+    justify-content: center;
+}
+
+.restore-input-group {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.file-input {
+    display: none;
+}
+
+.file-label {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    cursor: pointer;
+    width: 100%;
+}
+
+.file-label svg {
+    flex-shrink: 0;
+}
+
+#restore-file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.backup-warning {
+    margin-top: var(--space-4);
+    font-size: 11px;
+    color: var(--warning);
+    line-height: 1.4;
+}
+
+[data-theme="dark"] .backup-card-icon {
+    background: rgba(37, 99, 235, 0.15);
+}
+
+[data-theme="dark"] .backup-card-icon-restore {
+    background: rgba(234, 179, 8, 0.15);
+}
+
+/* ============================================
+   Streaming Response Styles
+   ============================================ */
+
+.message-streaming .message-bubble {
+    position: relative;
+}
+
+.streaming-content {
+    min-height: 1.5em;
+    white-space: pre-wrap;
+}
+
+.streaming-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1.1em;
+    background: var(--primary);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: cursor-blink 0.8s infinite;
+}
+
+@keyframes cursor-blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+}
+
+.message-streaming .message-content {
+    line-height: 1.6;
+}

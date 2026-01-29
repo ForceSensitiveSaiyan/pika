@@ -785,6 +785,28 @@ async def download_backup(
         if feedback_path.exists():
             zf.write(feedback_path, "feedback.json")
 
+        # Add user database
+        db_path = data_dir / "pika.db"
+        if db_path.exists():
+            zf.write(db_path, "pika.db")
+
+        # Add backup metadata
+        import json
+        from pika import __version__
+        metadata = {
+            "version": __version__,
+            "created_at": datetime.now().isoformat(),
+            "includes": {
+                "documents": docs_dir.exists(),
+                "chroma": chroma_dir.exists() if 'chroma_dir' in dir() else Path(settings.chroma_persist_dir).exists(),
+                "config": config_path.exists(),
+                "database": db_path.exists(),
+                "history": history_path.exists(),
+                "feedback": feedback_path.exists(),
+            }
+        }
+        zf.writestr("backup_meta.json", json.dumps(metadata, indent=2))
+
     zip_buffer.seek(0)
 
     # Audit log
@@ -922,6 +944,16 @@ async def restore_backup(
                 with zf.open("feedback.json") as src:
                     with open(data_dir / "feedback.json", "wb") as dst:
                         dst.write(src.read())
+
+            # Restore user database
+            if "pika.db" in namelist:
+                with zf.open("pika.db") as src:
+                    db_path = data_dir / "pika.db"
+                    with open(db_path, "wb") as dst:
+                        dst.write(src.read())
+                # Reset database singleton to pick up restored DB
+                import pika.services.database as db_module
+                db_module._database = None
 
             # Note: We don't restore audit.log to preserve the current audit trail
 

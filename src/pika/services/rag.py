@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from threading import Lock
-from typing import Callable
+from typing import AsyncIterator, Callable
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -1253,6 +1253,155 @@ Answer based on the context above:"""
             sources=sources,
             confidence=confidence,
         )
+
+    async def query_stream(
+        self,
+        question: str,
+        top_k: int | None = None,
+    ) -> AsyncIterator[dict]:
+        """Query the RAG system with streaming response.
+
+        Yields JSON-serializable dicts:
+        - {"type": "metadata", "sources": [...], "confidence": "..."}
+        - {"type": "token", "content": "..."}
+        - {"type": "done", "answer": "..."}
+        - {"type": "error", "message": "..."}
+        """
+        import time as time_module
+
+        query_start = time_module.time()
+
+        if top_k is None:
+            top_k = self.settings.top_k
+
+        try:
+            self._ensure_initialized()
+        except RuntimeError as e:
+            yield {"type": "error", "message": str(e)}
+            return
+
+        # Get embedding for the question
+        try:
+            logger.info(f"[RAG.query_stream] Starting query: '{question[:50]}...' top_k={top_k}")
+            embed_start = time_module.time()
+            question_embedding = self._get_embedding(question)
+            embed_elapsed = time_module.time() - embed_start
+            logger.info(f"[RAG.query_stream] Embedding completed in {embed_elapsed:.2f}s")
+        except Exception as e:
+            logger.error(f"[RAG.query_stream] Failed to get embedding: {e}")
+            yield {"type": "error", "message": "Failed to process question"}
+            return
+
+        # Query ChromaDB
+        chroma_start = time_module.time()
+        results = self.collection.query(
+            query_embeddings=[question_embedding],
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
+        )
+        chroma_elapsed = time_module.time() - chroma_start
+        logger.info(f"[RAG.query_stream] ChromaDB query completed in {chroma_elapsed:.2f}s")
+
+        # Convert distances to similarities
+        distances = results["distances"][0]
+        similarities = [1 - d for d in distances]
+
+        # Build sources
+        sources = []
+        for i, (doc, metadata, similarity) in enumerate(
+            zip(
+                results["documents"][0],
+                results["metadatas"][0],
+                similarities,
+            )
+        ):
+            sources.append(
+                Source(
+                    filename=metadata["source"],
+                    chunk_index=metadata["chunk_index"],
+                    content=doc,
+                    similarity=similarity,
+                )
+            )
+
+        # Determine confidence
+        confidence = self._get_confidence(similarities)
+
+        # Yield metadata first so UI can show sources while streaming
+        yield {
+            "type": "metadata",
+            "sources": [s.to_dict() for s in sources],
+            "confidence": confidence.value,
+        }
+
+        # Generate answer based on confidence
+        if confidence == Confidence.NONE:
+            answer = (
+                "I couldn't find relevant information in the indexed documents "
+                "to answer your question. Please try rephrasing or ensure the "
+                "relevant documents are indexed."
+            )
+            yield {"type": "token", "content": answer}
+            yield {"type": "done", "answer": answer}
+            return
+
+        # Build context from retrieved chunks
+        context_parts = []
+        for source in sources:
+            context_parts.append(f"[From {source.filename}]:\n{source.content}")
+        context = "\n\n---\n\n".join(context_parts)
+
+        # Generate streaming answer using Ollama
+        system_prompt = (
+            "You are a helpful assistant answering questions based on the provided context. "
+            "Use only the information from the context to answer. "
+            "If the context doesn't contain enough information, say so. "
+            "Be concise and cite which document(s) your answer comes from."
+        )
+
+        prompt = f"""Context:
+{context}
+
+Question: {question}
+
+Answer based on the context above:"""
+
+        try:
+            ollama_start = time_module.time()
+            logger.info(f"[RAG.query_stream] Starting Ollama stream (prompt_len={len(prompt)})")
+
+            full_answer = ""
+            async for token in self.ollama_client.generate_stream(
+                prompt=prompt,
+                system=system_prompt,
+            ):
+                full_answer += token
+                yield {"type": "token", "content": token}
+
+            ollama_elapsed = time_module.time() - ollama_start
+            total_elapsed = time_module.time() - query_start
+            logger.info(f"[RAG.query_stream] Completed in {total_elapsed:.1f}s (Ollama: {ollama_elapsed:.1f}s)")
+
+            yield {"type": "done", "answer": full_answer}
+
+        except OllamaConnectionError:
+            yield {
+                "type": "error",
+                "message": "Unable to connect to the AI model service. Please check that Ollama is running.",
+            }
+        except OllamaModelNotFoundError as e:
+            yield {
+                "type": "error",
+                "message": f"The model '{e.model}' is not available. Please go to Admin to pull or select a model.",
+            }
+        except OllamaTimeoutError:
+            yield {
+                "type": "error",
+                "message": "The request timed out. Please try a shorter question.",
+            }
+        except Exception as e:
+            logger.error(f"[RAG.query_stream] Unexpected error: {e}")
+            yield {"type": "error", "message": "An unexpected error occurred"}
 
 
 # Singleton instance

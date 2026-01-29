@@ -270,6 +270,80 @@
                 </div>
             </div>
         </section>
+
+        <!-- Backup & Restore Section -->
+        <section class="admin-section">
+            <div class="section-header">
+                <div class="section-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                </div>
+                <div class="section-title-group">
+                    <h2 class="section-title">Backup & Restore</h2>
+                    <p class="section-desc">Download or restore your PIKA data</p>
+                </div>
+            </div>
+
+            <div class="section-body">
+                <div class="backup-restore-grid">
+                    <!-- Backup Card -->
+                    <div class="backup-card">
+                        <div class="backup-card-icon">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                        </div>
+                        <h3 class="backup-card-title">Download Backup</h3>
+                        <p class="backup-card-desc">Export all documents, index data, configuration, and user accounts as a ZIP file.</p>
+                        <button class="btn btn-primary" onclick="downloadBackup()" id="backup-btn">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            Download Backup
+                        </button>
+                    </div>
+
+                    <!-- Restore Card -->
+                    <div class="backup-card">
+                        <div class="backup-card-icon backup-card-icon-restore">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                        </div>
+                        <h3 class="backup-card-title">Restore Backup</h3>
+                        <p class="backup-card-desc">Upload a backup ZIP file to restore documents, index, and configuration.</p>
+                        <div class="restore-input-group">
+                            <input type="file" id="restore-file" accept=".zip" class="file-input" onchange="updateRestoreButton()">
+                            <label for="restore-file" class="btn btn-secondary file-label">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                    <polyline points="14 2 14 8 20 8"></polyline>
+                                </svg>
+                                <span id="restore-file-name">Choose file...</span>
+                            </label>
+                            <button class="btn btn-warning" onclick="restoreBackup()" id="restore-btn" disabled>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                Restore
+                            </button>
+                        </div>
+                        <p class="backup-warning">Warning: Restoring will overwrite existing data. A restart is required after restore.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
     </div>
 </div>
 
@@ -1086,6 +1160,113 @@
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    // ==================== Backup & Restore ====================
+
+    function downloadBackup() {
+        const btn = document.getElementById('backup-btn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Creating backup...';
+
+        // Create a temporary link to trigger the download
+        const link = document.createElement('a');
+        link.href = '/admin/backup';
+        link.download = '';  // Let the server set the filename
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        // Reset button after a short delay (download starts async)
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Download Backup
+            `;
+            showToast('Backup download started', 'success');
+        }, 1000);
+    }
+
+    function updateRestoreButton() {
+        const fileInput = document.getElementById('restore-file');
+        const restoreBtn = document.getElementById('restore-btn');
+        const fileName = document.getElementById('restore-file-name');
+
+        if (fileInput.files.length > 0) {
+            fileName.textContent = fileInput.files[0].name;
+            restoreBtn.disabled = false;
+        } else {
+            fileName.textContent = 'Choose file...';
+            restoreBtn.disabled = true;
+        }
+    }
+
+    async function restoreBackup() {
+        const fileInput = document.getElementById('restore-file');
+        const restoreBtn = document.getElementById('restore-btn');
+
+        if (!fileInput.files.length) {
+            showToast('Please select a backup file', 'error');
+            return;
+        }
+
+        const file = fileInput.files[0];
+        if (!file.name.endsWith('.zip')) {
+            showToast('Backup file must be a .zip archive', 'error');
+            return;
+        }
+
+        // Confirm restore
+        if (!confirm('WARNING: This will overwrite all existing data including documents, index, and user accounts.\n\nAre you sure you want to restore from this backup?\n\nNote: PIKA will need to be restarted after restore.')) {
+            return;
+        }
+
+        restoreBtn.disabled = true;
+        restoreBtn.innerHTML = '<span class="spinner"></span> Restoring...';
+
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await fetch('/admin/restore', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Restore failed');
+            }
+
+            const result = await response.json();
+            showToast(result.message, 'success');
+
+            // Show restart reminder
+            setTimeout(() => {
+                alert('Backup restored successfully.\n\nPlease restart PIKA to load the restored data.');
+            }, 500);
+
+        } catch (error) {
+            showToast(`Restore failed: ${error.message}`, 'error');
+        } finally {
+            restoreBtn.disabled = false;
+            restoreBtn.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                Restore
+            `;
+            // Reset file input
+            fileInput.value = '';
+            document.getElementById('restore-file-name').textContent = 'Choose file...';
+        }
     }
 </script>
 {% endblock %}
