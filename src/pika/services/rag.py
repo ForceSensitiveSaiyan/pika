@@ -1334,9 +1334,10 @@ Answer based on the context above:"""
         confidence = self._get_confidence(similarities)
 
         # Yield metadata first so UI can show sources while streaming
+        from dataclasses import asdict
         yield {
             "type": "metadata",
-            "sources": [s.to_dict() for s in sources],
+            "sources": [asdict(s) for s in sources],
             "confidence": confidence.value,
         }
 
