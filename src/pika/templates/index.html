@@ -405,16 +405,28 @@
 
                 await fetch('/api/v1/query/status', { method: 'DELETE' });
             } else if (status.status === 'none') {
-                // No active query on backend - check if frontend thinks one is running (stale state)
-                // This can happen after container restart while frontend still has cached state
-                const lastMsg = chatHistory[chatHistory.length - 1];
-                if (lastMsg && lastMsg.type === 'user') {
-                    // Last message was a user question with no answer - might be stale
-                    // Check if there's a loading message we need to clean up
-                    const loadingMsgs = document.querySelectorAll('.message-loading');
-                    if (loadingMsgs.length > 0) {
-                        loadingMsgs.forEach(el => el.remove());
-                        showToast('Previous query was interrupted', 'info');
+                // No active query on backend - check for interrupted streaming query
+                const streamingState = getStreamingState();
+                if (streamingState) {
+                    // Streaming query was interrupted by navigation
+                    clearStreamingState();
+                    const lastMsg = chatHistory[chatHistory.length - 1];
+                    if (lastMsg && lastMsg.type === 'user' && lastMsg.content === streamingState.question) {
+                        // Add an info message about the interruption
+                        addMessage('Query was interrupted. Please try again.', 'error');
+                        chatHistory.push({ type: 'error', content: 'Query was interrupted. Please try again.' });
+                        saveChatHistory();
+                    }
+                } else {
+                    // Check if frontend thinks one is running (stale state from container restart)
+                    const lastMsg = chatHistory[chatHistory.length - 1];
+                    if (lastMsg && lastMsg.type === 'user') {
+                        // Last message was a user question with no answer - might be stale
+                        const loadingMsgs = document.querySelectorAll('.message-loading');
+                        if (loadingMsgs.length > 0) {
+                            loadingMsgs.forEach(el => el.remove());
+                            showToast('Previous query was interrupted', 'info');
+                        }
                     }
                 }
                 // Reset loading state just in case
@@ -583,6 +595,39 @@
     let streamingSources = [];
     let streamingConfidence = null;
     let hasStartedStreaming = false;
+    let streamingAbortController = null;
+
+    // Track streaming state for navigation recovery
+    function getStreamingStateKey() {
+        return CURRENT_USER ? `pika_streaming_${CURRENT_USER}` : 'pika_streaming';
+    }
+
+    function saveStreamingState(question) {
+        sessionStorage.setItem(getStreamingStateKey(), JSON.stringify({
+            question: question,
+            timestamp: Date.now()
+        }));
+    }
+
+    function clearStreamingState() {
+        sessionStorage.removeItem(getStreamingStateKey());
+    }
+
+    function getStreamingState() {
+        const saved = sessionStorage.getItem(getStreamingStateKey());
+        if (!saved) return null;
+        try {
+            const state = JSON.parse(saved);
+            // Only recover if interrupted within last 5 minutes
+            if (Date.now() - state.timestamp > 300000) {
+                clearStreamingState();
+                return null;
+            }
+            return state;
+        } catch (e) {
+            return null;
+        }
+    }
 
     function convertLoadingToStreaming(loadingMsgId) {
         // Convert the "Thinking..." loading message to a streaming message
@@ -628,7 +673,7 @@
         const cursor = msg.querySelector('.streaming-cursor');
         if (cursor) cursor.remove();
 
-        // Build full message HTML
+        // Build full message HTML (same structure as addAnswerMessage)
         let sourcesHtml = '';
         if (result.sources && result.sources.length > 0) {
             const uniqueSources = [...new Set(result.sources.map(s => s.filename))];
@@ -653,31 +698,56 @@
                     Try adding more documents in the <a href="/admin">Admin</a> panel
                 </div>
             `;
+        } else if (isNoResults) {
+            noResultsHint = `
+                <div class="no-results-hint">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <line x1="12" y1="16" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                    </svg>
+                    No relevant information found in the indexed documents.
+                </div>
+            `;
         }
+
+        // Get the last user question for feedback
+        const safeQuestion = chatHistory.filter(m => m.type === 'user').pop()?.content || '';
 
         const bubble = msg.querySelector('.message-bubble');
         bubble.innerHTML = `
             <div class="message-content">${escapeHtml(result.answer)}</div>
             ${sourcesHtml}
             ${noResultsHint}
-            <div class="message-confidence confidence-${result.confidence}">
-                <span class="confidence-dot"></span>
-                ${result.confidence} confidence
-            </div>
-            <div class="message-feedback" data-query-id="${queryId}">
-                <span class="feedback-label">Helpful?</span>
-                <button class="feedback-btn" data-rating="up" onclick="submitFeedback('${queryId}', 'up', this)" title="Yes">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
-                    </svg>
-                </button>
-                <button class="feedback-btn" data-rating="down" onclick="submitFeedback('${queryId}', 'down', this)" title="No">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path>
-                    </svg>
-                </button>
+            <div class="message-footer">
+                <span class="confidence confidence-${result.confidence}">
+                    <span class="confidence-dot"></span>
+                    ${result.confidence}
+                </span>
+                <div class="message-actions">
+                    <button class="action-btn" onclick="copyAnswer(this, '${msgId}')" title="Copy answer">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                    </button>
+                    <button class="action-btn feedback-btn" onclick="submitFeedback('${queryId || ''}', 'up', this)" title="Helpful" data-rating="">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
+                        </svg>
+                    </button>
+                    <button class="action-btn feedback-btn" onclick="submitFeedback('${queryId || ''}', 'down', this)" title="Not helpful" data-rating="">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path>
+                        </svg>
+                    </button>
+                </div>
             </div>
         `;
+
+        // Store answer text for copy and feedback (same as addAnswerMessage)
+        msg.dataset.answer = result.answer;
+        msg.dataset.question = safeQuestion;
     }
 
     async function sendQuestionStreaming(question, loadingMsgId) {
@@ -688,11 +758,18 @@
         streamingConfidence = null;
         hasStartedStreaming = false;
 
+        // Track streaming state for navigation recovery
+        saveStreamingState(question);
+
+        // Use AbortController for clean cancellation
+        streamingAbortController = new AbortController();
+
         try {
             const response = await fetch('/api/v1/query/stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ question })
+                body: JSON.stringify({ question }),
+                signal: streamingAbortController.signal
             });
 
             if (!response.ok) {
@@ -746,7 +823,10 @@
                         streamingContent += eventData.content;
                         updateStreamingMessage(streamingMsgId, streamingContent);
                     } else if (eventData.type === 'done') {
-                        // Finalize the message
+                        // Finalize the message - clear streaming state first
+                        clearStreamingState();
+                        streamingAbortController = null;
+
                         const result = {
                             answer: eventData.answer || streamingContent,
                             sources: streamingSources,
@@ -764,6 +844,9 @@
             }
 
             // If we get here without a 'done' event, finalize with what we have
+            clearStreamingState();
+            streamingAbortController = null;
+
             if (streamingContent) {
                 const result = {
                     answer: streamingContent,
@@ -779,6 +862,13 @@
             return true;
 
         } catch (error) {
+            streamingAbortController = null;
+
+            // Don't clear streaming state on abort - leave it for navigation recovery
+            if (error.name !== 'AbortError') {
+                clearStreamingState();
+            }
+
             // Remove streaming message on error
             if (streamingMsgId) {
                 removeMessage(streamingMsgId);
@@ -810,38 +900,10 @@
         chatHistory.push({ type: 'user', content: question });
         saveChatHistory();
 
-        // Show "Thinking..." loading message first
+        // Show "Thinking..." loading message
         currentLoadingId = addMessage('Thinking', 'assistant', true);
 
-        // Try streaming first
-        try {
-            await sendQuestionStreaming(question, currentLoadingId);
-            currentLoadingId = null;
-            isLoading = false;
-            updateSendButton();
-            await updateOnboarding();
-            return;
-        } catch (streamError) {
-            console.warn('Streaming failed, falling back to polling:', streamError);
-            // Remove the loading message on error before showing error or falling back
-            if (currentLoadingId) {
-                removeMessage(currentLoadingId);
-                currentLoadingId = null;
-            }
-            // Show error if it's a real error (not just unsupported)
-            if (streamError.message && !streamError.message.includes('fetch')) {
-                addMessage('Error: ' + streamError.message, 'error');
-                chatHistory.push({ type: 'error', content: 'Error: ' + streamError.message });
-                saveChatHistory();
-                isLoading = false;
-                updateSendButton();
-                return;
-            }
-        }
-
-        // Fallback to polling-based query - recreate loading message
-        currentLoadingId = addMessage('Thinking', 'assistant', true);
-
+        // Use polling-based queries (tracks state on server, survives navigation)
         try {
             const response = await fetch('/api/v1/query', {
                 method: 'POST',
@@ -1068,6 +1130,13 @@
         stopBtn.disabled = true;
         stopBtn.innerHTML = '<span class="spinner"></span>';
 
+        // Abort streaming request if in progress
+        if (streamingAbortController) {
+            streamingAbortController.abort();
+            streamingAbortController = null;
+            clearStreamingState();
+        }
+
         try {
             const response = await fetch('/api/v1/query/cancel', { method: 'POST' });
             const result = await response.json();
@@ -1084,6 +1153,10 @@
         if (currentLoadingId) {
             removeMessage(currentLoadingId);
             currentLoadingId = null;
+        }
+        if (streamingMsgId && streamingMsgId !== currentLoadingId) {
+            removeMessage(streamingMsgId);
+            streamingMsgId = null;
         }
         addMessage('Query cancelled', 'error');
         chatHistory.push({ type: 'error', content: 'Query cancelled' });

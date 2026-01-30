@@ -1389,6 +1389,33 @@ Answer based on the context above:"""
             total_elapsed = time_module.time() - query_start
             logger.info(f"[RAG.query_stream] Completed in {total_elapsed:.1f}s (Ollama: {ollama_elapsed:.1f}s)")
 
+            # Log to history and audit (same as _execute_query)
+            try:
+                from pika.services.audit import get_audit_logger
+                from pika.services.app_config import get_app_config
+                from pika.services.history import get_history_service
+
+                # Audit log
+                audit = get_audit_logger()
+                audit.log_query(
+                    question=question,
+                    model=get_app_config().get_current_model(),
+                    confidence=confidence.value,
+                    sources=[s.filename for s in sources],
+                )
+
+                # Save to history (username will be None for streaming - that's OK)
+                history = get_history_service()
+                history.add_query(
+                    question=question,
+                    answer=full_answer,
+                    confidence=confidence.value,
+                    sources=[s.filename for s in sources],
+                    username=None,  # Streaming doesn't track user
+                )
+            except Exception as log_error:
+                logger.warning(f"[RAG.query_stream] Failed to log query: {log_error}")
+
             yield {"type": "done", "answer": full_answer}
 
         except OllamaConnectionError:
