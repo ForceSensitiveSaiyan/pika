@@ -1274,17 +1274,23 @@ Answer based on the context above:"""
         if top_k is None:
             top_k = self.settings.top_k
 
+        # Check if index has documents
         try:
-            self._ensure_initialized()
-        except RuntimeError as e:
-            yield {"type": "error", "message": str(e)}
+            doc_count = self.collection.count()
+        except Exception:
+            doc_count = 0
+
+        if doc_count == 0:
+            yield {"type": "metadata", "sources": [], "confidence": "none"}
+            yield {"type": "token", "content": "No documents indexed yet. Upload documents and click Refresh Index."}
+            yield {"type": "done", "answer": "No documents indexed yet. Upload documents and click Refresh Index."}
             return
 
         # Get embedding for the question
         try:
             logger.info(f"[RAG.query_stream] Starting query: '{question[:50]}...' top_k={top_k}")
             embed_start = time_module.time()
-            question_embedding = self._get_embedding(question)
+            question_embedding = self._embed([question])[0]
             embed_elapsed = time_module.time() - embed_start
             logger.info(f"[RAG.query_stream] Embedding completed in {embed_elapsed:.2f}s")
         except Exception as e:
