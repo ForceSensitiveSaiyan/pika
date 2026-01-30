@@ -582,25 +582,25 @@
     let streamingContent = '';
     let streamingSources = [];
     let streamingConfidence = null;
+    let hasStartedStreaming = false;
 
-    function createStreamingMessage() {
-        const container = document.getElementById('chat-messages');
-        const id = 'msg-' + (messageCounter++);
+    function convertLoadingToStreaming(loadingMsgId) {
+        // Convert the "Thinking..." loading message to a streaming message
+        const msg = document.getElementById(loadingMsgId);
+        if (!msg) return loadingMsgId;
 
-        const div = document.createElement('div');
-        div.id = id;
-        div.className = 'message message-assistant message-streaming';
-        div.innerHTML = `
-            <div class="message-bubble">
+        msg.classList.remove('message-loading');
+        msg.classList.add('message-streaming');
+
+        const bubble = msg.querySelector('.message-bubble');
+        if (bubble) {
+            bubble.innerHTML = `
                 <div class="message-content streaming-content"></div>
                 <div class="streaming-cursor"></div>
-            </div>
-        `;
+            `;
+        }
 
-        container.appendChild(div);
-        container.scrollTop = container.scrollHeight;
-
-        return id;
+        return loadingMsgId;
     }
 
     function updateStreamingMessage(msgId, content) {
@@ -609,8 +609,7 @@
 
         const contentEl = msg.querySelector('.streaming-content');
         if (contentEl) {
-            // Use innerHTML to support markdown-like formatting
-            contentEl.innerHTML = escapeHtml(content);
+            contentEl.textContent = content;
         }
 
         // Auto-scroll
@@ -623,8 +622,9 @@
         if (!msg) return;
 
         msg.classList.remove('message-streaming');
+        msg.classList.remove('message-loading');
 
-        // Remove cursor
+        // Remove cursor if present
         const cursor = msg.querySelector('.streaming-cursor');
         if (cursor) cursor.remove();
 
@@ -680,11 +680,13 @@
         `;
     }
 
-    async function sendQuestionStreaming(question) {
-        streamingMsgId = createStreamingMessage();
+    async function sendQuestionStreaming(question, loadingMsgId) {
+        // Start with the existing loading message showing "Thinking..."
+        streamingMsgId = loadingMsgId;
         streamingContent = '';
         streamingSources = [];
         streamingConfidence = null;
+        hasStartedStreaming = false;
 
         try {
             const response = await fetch('/api/v1/query/stream', {
@@ -708,42 +710,55 @@
 
                 buffer += decoder.decode(value, { stream: true });
 
-                // Parse SSE events from buffer
-                const lines = buffer.split('\n');
-                buffer = lines.pop() || ''; // Keep incomplete line in buffer
+                // Parse SSE events from buffer - split on double newline for complete events
+                let eventEnd;
+                while ((eventEnd = buffer.indexOf('\n\n')) !== -1) {
+                    const eventBlock = buffer.slice(0, eventEnd);
+                    buffer = buffer.slice(eventEnd + 2);
 
-                let eventType = 'message';
-                for (const line of lines) {
-                    if (line.startsWith('event: ')) {
-                        eventType = line.slice(7).trim();
-                    } else if (line.startsWith('data: ')) {
-                        try {
-                            const data = JSON.parse(line.slice(6));
+                    // Parse the event block
+                    let eventType = 'message';
+                    let eventData = null;
 
-                            if (data.type === 'metadata') {
-                                streamingSources = data.sources || [];
-                                streamingConfidence = data.confidence;
-                            } else if (data.type === 'token') {
-                                streamingContent += data.content;
-                                updateStreamingMessage(streamingMsgId, streamingContent);
-                            } else if (data.type === 'done') {
-                                // Finalize the message
-                                const result = {
-                                    answer: data.answer || streamingContent,
-                                    sources: streamingSources,
-                                    confidence: streamingConfidence || 'medium'
-                                };
-                                const queryId = 'stream-' + Date.now();
-                                finalizeStreamingMessage(streamingMsgId, result, queryId);
-                                chatHistory.push({ type: 'assistant', result, queryId });
-                                saveChatHistory();
-                                return true;
-                            } else if (data.type === 'error') {
-                                throw new Error(data.message || 'Query failed');
+                    for (const line of eventBlock.split('\n')) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.slice(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            try {
+                                eventData = JSON.parse(line.slice(6));
+                            } catch (e) {
+                                console.warn('Failed to parse SSE data:', line);
                             }
-                        } catch (parseError) {
-                            console.warn('Failed to parse SSE data:', line, parseError);
                         }
+                    }
+
+                    if (!eventData) continue;
+
+                    if (eventData.type === 'metadata') {
+                        streamingSources = eventData.sources || [];
+                        streamingConfidence = eventData.confidence;
+                    } else if (eventData.type === 'token') {
+                        // First token - convert loading message to streaming
+                        if (!hasStartedStreaming) {
+                            hasStartedStreaming = true;
+                            convertLoadingToStreaming(streamingMsgId);
+                        }
+                        streamingContent += eventData.content;
+                        updateStreamingMessage(streamingMsgId, streamingContent);
+                    } else if (eventData.type === 'done') {
+                        // Finalize the message
+                        const result = {
+                            answer: eventData.answer || streamingContent,
+                            sources: streamingSources,
+                            confidence: streamingConfidence || 'medium'
+                        };
+                        const queryId = 'stream-' + Date.now();
+                        finalizeStreamingMessage(streamingMsgId, result, queryId);
+                        chatHistory.push({ type: 'assistant', result, queryId });
+                        saveChatHistory();
+                        return true;
+                    } else if (eventData.type === 'error') {
+                        throw new Error(eventData.message || 'Query failed');
                     }
                 }
             }
@@ -795,15 +810,24 @@
         chatHistory.push({ type: 'user', content: question });
         saveChatHistory();
 
+        // Show "Thinking..." loading message first
+        currentLoadingId = addMessage('Thinking', 'assistant', true);
+
         // Try streaming first
         try {
-            await sendQuestionStreaming(question);
+            await sendQuestionStreaming(question, currentLoadingId);
+            currentLoadingId = null;
             isLoading = false;
             updateSendButton();
             await updateOnboarding();
             return;
         } catch (streamError) {
             console.warn('Streaming failed, falling back to polling:', streamError);
+            // Remove the loading message on error before showing error or falling back
+            if (currentLoadingId) {
+                removeMessage(currentLoadingId);
+                currentLoadingId = null;
+            }
             // Show error if it's a real error (not just unsupported)
             if (streamError.message && !streamError.message.includes('fetch')) {
                 addMessage('Error: ' + streamError.message, 'error');
@@ -815,7 +839,7 @@
             }
         }
 
-        // Fallback to polling-based query
+        // Fallback to polling-based query - recreate loading message
         currentLoadingId = addMessage('Thinking', 'assistant', true);
 
         try {
