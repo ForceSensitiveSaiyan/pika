@@ -80,8 +80,9 @@ async def lifespan(app: FastAPI):
     try:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, shutdown_handler)
-    except NotImplementedError:
-        # Windows doesn't support add_signal_handler
+    except (NotImplementedError, RuntimeError):
+        # NotImplementedError: Windows doesn't support add_signal_handler
+        # RuntimeError: Can't run in non-main thread (e.g., during testing)
         pass
 
     logger.info(f"Starting {settings.app_name} v{__version__}")

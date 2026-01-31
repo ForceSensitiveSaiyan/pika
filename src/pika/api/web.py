@@ -599,8 +599,12 @@ def _sanitize_filename(filename: str) -> str:
     Returns the basename only, stripping any directory components.
     Raises ValueError if filename is invalid.
     """
+    # Normalize backslashes to forward slashes for cross-platform security
+    # (a Linux server could receive a malicious file with Windows-style paths)
+    normalized = filename.replace("\\", "/")
+
     # Get just the filename, no path components
-    safe_name = Path(filename).name
+    safe_name = Path(normalized).name
 
     # Reject empty names
     if not safe_name:
@@ -611,7 +615,7 @@ def _sanitize_filename(filename: str) -> str:
         raise ValueError("Hidden files not allowed")
 
     # Reject path traversal attempts
-    if ".." in safe_name or "/" in safe_name or "\\" in safe_name:
+    if ".." in safe_name:
         raise ValueError("Invalid filename characters")
 
     # Reject null bytes
@@ -1095,9 +1099,13 @@ def _safe_extract_path(base_dir: Path, rel_path: str) -> Path | None:
     Returns None if the path would escape the base directory.
     """
     try:
+        # Normalize backslashes to forward slashes for cross-platform security
+        # (a Linux server could receive a malicious zip with Windows-style paths)
+        normalized_path = rel_path.replace("\\", "/")
+
         # Resolve both paths to absolute
         base_resolved = base_dir.resolve()
-        dest_path = (base_dir / rel_path).resolve()
+        dest_path = (base_dir / normalized_path).resolve()
         # Use relative_to which raises ValueError if dest is not under base
         dest_path.relative_to(base_resolved)
         return dest_path
