@@ -711,24 +711,79 @@ async def delete_document(
 
 
 @router.get("/admin/logs", response_class=HTMLResponse)
-async def admin_logs_page(request: Request):
-    """Serve the audit logs page."""
+async def admin_logs_page(
+    request: Request,
+    page: int = 1,
+    per_page: int = 50,
+):
+    """Serve the audit logs page with pagination."""
     if is_admin_auth_required() and not is_authenticated(request):
         return RedirectResponse(url="/admin/login", status_code=302)
     if is_admin_auth_required() and not is_admin(request):
         return RedirectResponse(url="/", status_code=302)
 
+    # Validate pagination params
+    page = max(1, page)
+    per_page = max(10, min(100, per_page))  # Clamp between 10-100
+
     audit = get_audit_logger()
-    logs = audit.get_recent_logs(100)
+    total_count = audit.get_total_count()
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    page = min(page, total_pages)  # Don't exceed total pages
+
+    offset = (page - 1) * per_page
+    logs = audit.get_recent_logs(limit=per_page, offset=offset)
 
     response = templates.TemplateResponse(
         "logs.html",
-        {"request": request, "logs": logs},
+        {
+            "request": request,
+            "logs": logs,
+            "page": page,
+            "per_page": per_page,
+            "total_count": total_count,
+            "total_pages": total_pages,
+        },
     )
     # Prevent browser from caching authenticated pages
     for header, value in NO_CACHE_HEADERS.items():
         response.headers[header] = value
     return response
+
+
+@router.get("/api/admin/logs")
+async def get_audit_logs_api(
+    request: Request,
+    page: int = 1,
+    per_page: int = 50,
+):
+    """Get audit logs as JSON with pagination."""
+    if is_admin_auth_required() and not is_authenticated(request):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if is_admin_auth_required() and not is_admin(request):
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    # Validate pagination params
+    page = max(1, page)
+    per_page = max(10, min(100, per_page))
+
+    audit = get_audit_logger()
+    total_count = audit.get_total_count()
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    page = min(page, total_pages)
+
+    offset = (page - 1) * per_page
+    logs = audit.get_recent_logs(limit=per_page, offset=offset)
+
+    return {
+        "logs": logs,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total_count": total_count,
+            "total_pages": total_pages,
+        },
+    }
 
 
 # Background backup state
@@ -898,6 +953,7 @@ async def _run_backup(settings: Settings) -> None:
 
 
 @router.post("/admin/backup/start")
+@limiter.limit(lambda: get_settings().rate_limit_admin)
 async def start_backup(
     request: Request,
     settings: Settings = Depends(get_settings),
@@ -981,6 +1037,7 @@ async def download_backup_file(
 
 
 @router.delete("/admin/backup")
+@limiter.limit(lambda: get_settings().rate_limit_admin)
 async def clear_backup(request: Request):
     """Clear the backup status and delete the backup file."""
     global _active_backup, _backup_file_path
@@ -1049,6 +1106,7 @@ def _safe_extract_path(base_dir: Path, rel_path: str) -> Path | None:
 
 
 @router.post("/admin/restore")
+@limiter.limit(lambda: get_settings().rate_limit_admin)
 async def restore_backup(
     request: Request,
     file: UploadFile,

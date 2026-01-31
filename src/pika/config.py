@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 50  # Maximum file upload size in MB
     rate_limit_auth: str = "5/minute"  # Rate limit for auth endpoints
     rate_limit_query: str = "30/minute"  # Rate limit for query endpoints
+    rate_limit_admin: str = "10/minute"  # Rate limit for admin operations (backup/restore)
 
     def model_post_init(self, __context) -> None:
         """Generate session secret if not provided."""

@@ -41,7 +41,7 @@
     <div class="card" style="max-width: 1000px; margin: 0 auto;">
         <div class="card-header">
             <h2 class="card-title">Recent Activity</h2>
-            <span class="badge badge-secondary">{{ logs|length }} events</span>
+            <span class="badge badge-secondary">{{ total_count }} total events</span>
         </div>
         <div class="card-body">
             {% if logs %}
@@ -92,6 +92,31 @@
                     </div>
                     {% endfor %}
                 </div>
+
+                <!-- Pagination -->
+                {% if total_pages > 1 %}
+                <div class="pagination" style="display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border-color);">
+                    {% if page > 1 %}
+                    <a href="?page=1&per_page={{ per_page }}" class="btn btn-secondary btn-sm" title="First page">&laquo;</a>
+                    <a href="?page={{ page - 1 }}&per_page={{ per_page }}" class="btn btn-secondary btn-sm">&lsaquo; Prev</a>
+                    {% else %}
+                    <span class="btn btn-secondary btn-sm" style="opacity: 0.5; pointer-events: none;">&laquo;</span>
+                    <span class="btn btn-secondary btn-sm" style="opacity: 0.5; pointer-events: none;">&lsaquo; Prev</span>
+                    {% endif %}
+
+                    <span style="margin: 0 12px; color: var(--text-secondary);">
+                        Page {{ page }} of {{ total_pages }}
+                    </span>
+
+                    {% if page < total_pages %}
+                    <a href="?page={{ page + 1 }}&per_page={{ per_page }}" class="btn btn-secondary btn-sm">Next &rsaquo;</a>
+                    <a href="?page={{ total_pages }}&per_page={{ per_page }}" class="btn btn-secondary btn-sm" title="Last page">&raquo;</a>
+                    {% else %}
+                    <span class="btn btn-secondary btn-sm" style="opacity: 0.5; pointer-events: none;">Next &rsaquo;</span>
+                    <span class="btn btn-secondary btn-sm" style="opacity: 0.5; pointer-events: none;">&raquo;</span>
+                    {% endif %}
+                </div>
+                {% endif %}
             {% else %}
                 <div class="empty-state" style="padding: 40px; text-align: center;">
                     <p>No audit logs yet</p>

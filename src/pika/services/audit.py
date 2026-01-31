@@ -119,8 +119,30 @@ class AuditLogger:
             "ip_address": ip_address,
         })
 
-    def get_recent_logs(self, limit: int = 100) -> list[dict[str, Any]]:
-        """Get the most recent log entries."""
+    def get_total_count(self) -> int:
+        """Get the total number of log entries."""
+        if not self.log_path.exists():
+            return 0
+
+        try:
+            with open(self.log_path, "r", encoding="utf-8") as f:
+                return sum(1 for line in f if line.strip())
+        except Exception as e:
+            logger.error(f"Failed to count audit log entries: {e}")
+            return 0
+
+    def get_recent_logs(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """Get log entries with pagination support.
+
+        Args:
+            limit: Maximum number of entries to return
+            offset: Number of entries to skip (from most recent)
+
+        Returns:
+            List of log entries, most recent first
+        """
         if not self.log_path.exists():
             return []
 
@@ -128,17 +150,20 @@ class AuditLogger:
             with open(self.log_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
 
-            # Parse and return last N entries (most recent first)
-            logs = []
-            for line in reversed(lines[-limit:]):
+            # Parse all valid entries (most recent first)
+            all_logs = []
+            for line in reversed(lines):
                 line = line.strip()
                 if line:
                     try:
-                        logs.append(json.loads(line))
+                        all_logs.append(json.loads(line))
                     except json.JSONDecodeError:
                         continue
 
-            return logs
+            # Apply pagination
+            start = offset
+            end = offset + limit
+            return all_logs[start:end]
         except Exception as e:
             logger.error(f"Failed to read audit log: {e}")
             return []
