@@ -58,8 +58,11 @@ The test suite includes:
 - **RAG tests** (`test_rag.py`) - Vector storage and retrieval
 - **Auth tests** (`test_auth.py`) - Authentication and sessions
 - **Security tests** (`test_security.py`) - Password hashing, CSRF, rate limiting
+- **Queue tests** (`test_queue.py`) - Query queue and concurrency management
+- **Production tests** (`test_production_readiness.py`) - Settings validation, cleanup, pooling
+- **Backup tests** (`test_backup.py`) - Backup/restore functionality and security
 
-Tests run without requiring Ollama (mocked) and complete in about 70 seconds.
+Tests run without requiring Ollama (mocked) and complete in about 2-3 minutes.
 
 ### Test Coverage
 
@@ -72,11 +75,38 @@ xdg-open coverage_html/index.html  # Linux
 start coverage_html\index.html   # Windows
 ```
 
-## Screenshots
+## Features
 
-<!-- Screenshots will be added here -->
+### Multi-User Support
+- User authentication with secure bcrypt password hashing
+- Role-based access (admin/user roles)
+- Per-user chat history and query tracking
+- Session management with configurable expiry
 
-*Coming soon*
+### Query Queue System
+- FIFO queue for fair query processing in multi-user environments
+- Configurable concurrency (1 for CPU, 2+ for GPU)
+- Per-user queue limits to prevent one user blocking others
+- Queue position and estimated wait time display
+- Automatic timeout for stale queries
+
+### Backup & Restore
+- Full backup of documents, index, configuration, and user database
+- Background backup with progress tracking
+- One-click restore from ZIP archive
+- Metadata included (version, timestamp)
+
+### Security
+- CSRF protection for all forms
+- Rate limiting on queries and uploads
+- Secure session management (in-memory; server restart requires re-login)
+- Audit logging for admin actions
+- Path traversal prevention
+
+### Feedback System
+- Thumbs up/down feedback on query responses
+- Feedback stored for analytics purposes
+- Per-query rating with question/answer context
 
 ## Hardware Requirements
 
@@ -133,6 +163,31 @@ PIKA is configured via environment variables. Set these in your `docker-compose.
 | `CONFIDENCE_HIGH` | `0.7` | Threshold for high confidence answers |
 | `CONFIDENCE_MEDIUM` | `0.5` | Threshold for medium confidence answers |
 | `CONFIDENCE_LOW` | `0.3` | Threshold for low confidence answers |
+
+### Authentication Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AUTH_ENABLED` | `true` | Enable/disable authentication |
+| `SESSION_SECRET` | *auto-generated* | Secret key for session encryption |
+| `SESSION_EXPIRY` | `86400` | Session lifetime in seconds (24 hours) |
+
+### Query Queue Settings (Multi-User)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_CONCURRENT_QUERIES` | `1` | Max queries running simultaneously |
+| `MAX_QUEUED_PER_USER` | `3` | Max pending queries per user |
+| `QUEUE_TIMEOUT` | `300` | Seconds before queued query times out |
+| `MAX_QUEUE_SIZE` | `100` | Maximum total queue length |
+
+### Rate Limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RATE_LIMIT_QUERY` | `10/minute` | Query rate limit per user |
+| `RATE_LIMIT_UPLOAD` | `20/minute` | Upload rate limit per user |
+| `MAX_UPLOAD_SIZE` | `52428800` | Max upload size in bytes (50 MB) |
 
 ## Supported File Types
 
