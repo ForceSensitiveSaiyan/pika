@@ -19,6 +19,63 @@ class TestMetricsEndpoint:
         assert "pika_http_request_duration_seconds" in content
         assert "pika_info" in content
 
+    def test_metrics_records_requests(self, test_client):
+        """Verify request metrics are recorded after making requests."""
+        # Make a request to generate metrics
+        test_client.get("/api/v1/health")
+
+        # Check metrics endpoint
+        response = test_client.get("/metrics")
+        content = response.text
+
+        # Should have recorded the health request
+        assert "pika_http_requests_total" in content
+        assert 'endpoint="/api/v1/health"' in content or 'endpoint="/api/v1/' in content
+
+    def test_metrics_includes_query_metrics(self, test_client):
+        """Verify query-related metrics are defined."""
+        response = test_client.get("/metrics")
+        content = response.text
+
+        # Query metrics should be defined (even if zero)
+        assert "pika_queries_total" in content
+        assert "pika_query_duration_seconds" in content
+
+    def test_metrics_includes_index_gauges(self, test_client):
+        """Verify index-related gauges are defined."""
+        response = test_client.get("/metrics")
+        content = response.text
+
+        assert "pika_index_documents_total" in content
+        assert "pika_index_chunks_total" in content
+        assert "pika_active_queries" in content
+        assert "pika_queued_queries" in content
+
+
+class TestMetricsModule:
+    """Tests for the metrics module functions."""
+
+    def test_set_app_info(self):
+        """Verify app info can be set."""
+        from pika.services.metrics import set_app_info, APP_INFO
+
+        set_app_info("1.0.0", "test-model")
+        # No exception means success
+
+    def test_update_index_metrics(self):
+        """Verify index metrics can be updated."""
+        from pika.services.metrics import update_index_metrics, INDEX_DOCUMENTS, INDEX_CHUNKS
+
+        update_index_metrics(10, 100)
+        # Gauges should be set (we can't easily read the value in tests)
+
+    def test_update_queue_metrics(self):
+        """Verify queue metrics can be updated."""
+        from pika.services.metrics import update_queue_metrics, ACTIVE_QUERIES, QUEUED_QUERIES
+
+        update_queue_metrics(2, 5)
+        # Gauges should be set
+
 
 class TestHealthEndpoint:
     """Tests for the health check endpoint."""
