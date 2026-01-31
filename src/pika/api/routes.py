@@ -6,7 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
@@ -429,6 +429,17 @@ class QueryRequest(BaseModel):
     question: str
     top_k: int | None = None
 
+    @field_validator("top_k")
+    @classmethod
+    def validate_top_k(cls, v: int | None) -> int | None:
+        """Validate top_k is within bounds (1-50) if provided."""
+        if v is not None:
+            if v < 1:
+                raise ValueError("top_k must be at least 1")
+            if v > 50:
+                raise ValueError("top_k cannot exceed 50")
+        return v
+
 
 class SourceResponse(BaseModel):
     """Response model for a source document."""
@@ -649,7 +660,15 @@ async def get_index_info(
             ],
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get index info: {e}")
+        logger.exception(f"Failed to get index info: {e}")
+        # Return empty stats on error rather than 500
+        # This can happen after restore when ChromaDB needs recovery
+        return IndexInfoResponse(
+            total_documents=0,
+            total_chunks=0,
+            collection_name="pika_documents",
+            documents=[],
+        )
 
 
 @router.get("/documents", response_model=list[IndexedDocumentResponse])

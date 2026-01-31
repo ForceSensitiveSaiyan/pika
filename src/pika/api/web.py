@@ -155,8 +155,10 @@ async def shutdown_session_cleanup() -> None:
         _session_cleanup_task.cancel()
         try:
             await _session_cleanup_task
-        except Exception:
-            pass
+        except asyncio.CancelledError:
+            pass  # Expected when task is cancelled
+        except Exception as e:
+            logger.warning(f"[Sessions] Error during cleanup task shutdown: {e}")
         _session_cleanup_task = None
 
     logger.info("[Sessions] Cleanup task shutdown complete")
@@ -758,6 +760,15 @@ class BackupStatus:
 _active_backup: BackupStatus | None = None
 _backup_task: asyncio.Task | None = None
 _backup_file_path: Path | None = None
+_backup_lock: asyncio.Lock | None = None
+
+
+def _get_backup_lock() -> asyncio.Lock:
+    """Get or create the backup lock (must be created in async context)."""
+    global _backup_lock
+    if _backup_lock is None:
+        _backup_lock = asyncio.Lock()
+    return _backup_lock
 
 
 def get_active_backup() -> BackupStatus | None:
@@ -892,22 +903,33 @@ async def start_backup(
     settings: Settings = Depends(get_settings),
 ):
     """Start a background backup operation."""
-    global _active_backup, _backup_task
+    global _active_backup, _backup_task, _backup_file_path
 
     if is_admin_auth_required() and not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Authentication required")
     if is_admin_auth_required() and not is_admin(request):
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    if is_backup_running():
-        return {"started": False, "message": "Backup already in progress", "backup": _active_backup.to_dict()}
+    # Use lock to prevent race conditions when starting backups
+    async with _get_backup_lock():
+        if is_backup_running():
+            return {"started": False, "message": "Backup already in progress", "backup": _active_backup.to_dict()}
 
-    # Create new backup status
-    backup_id = f"backup-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    _active_backup = BackupStatus(backup_id=backup_id)
+        # Clean up any existing backup file before starting new one
+        if _backup_file_path and _backup_file_path.exists():
+            try:
+                _backup_file_path.unlink()
+                logger.info(f"Cleaned up old backup file: {_backup_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up old backup: {e}")
+        _backup_file_path = None
 
-    # Start background task
-    _backup_task = asyncio.create_task(_run_backup(settings))
+        # Create new backup status
+        backup_id = f"backup-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        _active_backup = BackupStatus(backup_id=backup_id)
+
+        # Start background task
+        _backup_task = asyncio.create_task(_run_backup(settings))
 
     # Audit log
     audit = get_audit_logger()
@@ -1042,6 +1064,11 @@ async def restore_backup(
     if is_admin_auth_required() and not is_admin(request):
         raise HTTPException(status_code=403, detail="Admin access required")
 
+    # Prevent restore while backup is running
+    async with _get_backup_lock():
+        if is_backup_running():
+            raise HTTPException(status_code=409, detail="Cannot restore while backup is in progress")
+
     if not file.filename or not file.filename.endswith(".zip"):
         raise HTTPException(status_code=400, detail="File must be a .zip archive")
 
@@ -1084,9 +1111,15 @@ async def restore_backup(
 
             # Clear and restore documents
             if has_documents:
+                # Clear contents but don't delete the directory (it may be a mount point)
                 if docs_dir.exists():
-                    shutil.rmtree(docs_dir)
-                docs_dir.mkdir(parents=True, exist_ok=True)
+                    for item in docs_dir.iterdir():
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                else:
+                    docs_dir.mkdir(parents=True, exist_ok=True)
 
                 for name in namelist:
                     if name.startswith("documents/") and not name.endswith("/"):
@@ -1099,9 +1132,23 @@ async def restore_backup(
 
             # Clear and restore ChromaDB
             if has_chroma:
+                # IMPORTANT: Shutdown RAG engine BEFORE touching ChromaDB files
+                # This releases SQLite connections so we can overwrite the database
+                from pika.services.rag import prepare_for_restore
+                prepare_for_restore()
+
+                # Small delay to ensure file handles are released
+                await asyncio.sleep(0.5)
+
+                # Clear contents but don't delete the directory (it may be a mount point)
                 if chroma_dir.exists():
-                    shutil.rmtree(chroma_dir)
-                chroma_dir.mkdir(parents=True, exist_ok=True)
+                    for item in chroma_dir.iterdir():
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                else:
+                    chroma_dir.mkdir(parents=True, exist_ok=True)
 
                 for name in namelist:
                     if name.startswith("chroma/") and not name.endswith("/"):
@@ -1111,6 +1158,30 @@ async def restore_backup(
                             dest_path.parent.mkdir(parents=True, exist_ok=True)
                             with zf.open(name) as src, open(dest_path, "wb") as dst:
                                 dst.write(src.read())
+
+                # Fix file permissions - ensure all ChromaDB files are writable
+                # This is necessary because zip extraction can lose write permissions
+                import os
+                import stat
+
+                # First, fix the chroma directory itself
+                chroma_dir.chmod(0o777)
+                logger.info(f"[Restore] Set chroma_dir permissions: {chroma_dir}")
+
+                # Then fix all subdirectories and files
+                files_fixed = 0
+                dirs_fixed = 0
+                for root, dirs, files in os.walk(chroma_dir):
+                    for d in dirs:
+                        dir_path = Path(root) / d
+                        dir_path.chmod(0o777)  # Full permissions for directories
+                        dirs_fixed += 1
+                    for f in files:
+                        file_path = Path(root) / f
+                        file_path.chmod(0o666)  # Read/write for files
+                        files_fixed += 1
+
+                logger.info(f"[Restore] ChromaDB restored to {chroma_dir}: {files_fixed} files, {dirs_fixed} dirs (permissions fixed)")
 
             # Restore config.json
             if "config.json" in namelist:
@@ -1144,16 +1215,34 @@ async def restore_backup(
 
             # Note: We don't restore audit.log to preserve the current audit trail
 
+            # Reset singletons to pick up restored data
+            # RAG engine - only reset if we didn't already (prepare_for_restore handles it for chroma restores)
+            if not has_chroma:
+                import pika.services.rag as rag_module
+                rag_module._rag_engine = None
+                logger.info("[Restore] RAG engine singleton reset - will be recreated on next access")
+
+            # Reset history service
+            import pika.services.history as history_module
+            history_module._history_service = None
+
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="Invalid zip file")
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Restore failed: {e}")
+        logger.exception(f"Restore failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Restore failed: {type(e).__name__}: {e}")
 
     # Audit log
     audit = get_audit_logger()
     audit.log_admin_action("backup_restore", {"filename": file.filename})
 
+    # Always tell user to re-index after restore
+    # (ChromaDB files are included in backup but can't be hot-loaded due to SQLite limitations)
+    message = "Backup restored successfully. Click 'Refresh Index' to rebuild the search index."
+
     return {
         "status": "restored",
-        "message": "Backup restored successfully. Please restart PIKA to reload the data.",
+        "message": message,
     }

@@ -816,11 +816,106 @@ class RAGEngine:
     def collection(self):
         """Get or create the ChromaDB collection."""
         if self._collection is None:
-            self._collection = self.chroma_client.get_or_create_collection(
-                name=self.COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"},
-            )
+            try:
+                self._collection = self.chroma_client.get_or_create_collection(
+                    name=self.COLLECTION_NAME,
+                    metadata={"hnsw:space": "cosine"},
+                )
+            except Exception as e:
+                error_str = str(e).lower()
+                if "readonly" in error_str or "read-only" in error_str or "code: 1032" in error_str:
+                    logger.warning("[RAG] ChromaDB readonly/moved error - attempting recovery")
+
+                    # First try: fix permissions and reinitialize
+                    self._fix_chroma_permissions()
+                    self._reinitialize_chroma()
+
+                    try:
+                        self._collection = self.chroma_client.get_or_create_collection(
+                            name=self.COLLECTION_NAME,
+                            metadata={"hnsw:space": "cosine"},
+                        )
+                    except Exception as retry_error:
+                        # ChromaDB's Rust bindings cache state globally - clearing files isn't enough
+                        # Clear everything and start fresh (user will need to re-index)
+                        logger.warning(f"[RAG] Permission fix failed ({retry_error}), clearing ChromaDB")
+                        self._clear_and_reinitialize_chroma()
+                        self._collection = self.chroma_client.get_or_create_collection(
+                            name=self.COLLECTION_NAME,
+                            metadata={"hnsw:space": "cosine"},
+                        )
+                        logger.info("[RAG] ChromaDB recovered - re-indexing required")
+                else:
+                    raise
         return self._collection
+
+    def _fix_chroma_permissions(self) -> None:
+        """Fix ChromaDB file permissions (e.g., after restore from backup)."""
+        import os
+
+        persist_dir = Path(self.settings.chroma_persist_dir)
+        if not persist_dir.exists():
+            return
+
+        logger.info(f"[RAG] Fixing permissions in {persist_dir}")
+        try:
+            # Fix the directory itself
+            persist_dir.chmod(0o777)
+
+            # Fix all subdirectories and files
+            for root, dirs, files in os.walk(persist_dir):
+                for d in dirs:
+                    try:
+                        (Path(root) / d).chmod(0o777)
+                    except Exception as e:
+                        logger.debug(f"[RAG] Could not fix permissions on dir {d}: {e}")
+                for f in files:
+                    try:
+                        (Path(root) / f).chmod(0o666)
+                    except Exception as e:
+                        logger.debug(f"[RAG] Could not fix permissions on file {f}: {e}")
+
+            logger.info("[RAG] ChromaDB permissions fixed")
+        except Exception as e:
+            logger.error(f"[RAG] Failed to fix permissions: {e}")
+
+    def _clear_and_reinitialize_chroma(self) -> None:
+        """Clear all ChromaDB data and reinitialize (nuclear option for recovery)."""
+        import gc
+        import shutil
+
+        persist_dir = Path(self.settings.chroma_persist_dir)
+        logger.warning(f"[RAG] Clearing ChromaDB data at {persist_dir}")
+
+        # Release current client
+        self.chroma_client = None
+        self._collection = None
+        gc.collect()
+
+        # Delete all contents of the chroma directory
+        if persist_dir.exists():
+            for item in persist_dir.iterdir():
+                try:
+                    if item.is_dir():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                except Exception as e:
+                    logger.error(f"[RAG] Failed to delete {item}: {e}")
+
+        # Ensure directory exists with correct permissions
+        persist_dir.mkdir(parents=True, exist_ok=True)
+        persist_dir.chmod(0o777)
+
+        # Create fresh ChromaDB client
+        import chromadb
+        from chromadb.config import Settings as ChromaSettings
+
+        self.chroma_client = chromadb.PersistentClient(
+            path=str(persist_dir),
+            settings=ChromaSettings(anonymized_telemetry=False),
+        )
+        logger.info("[RAG] ChromaDB cleared and reinitialized")
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for texts."""
@@ -1110,8 +1205,69 @@ class RAGEngine:
         except ValueError:
             # Collection doesn't exist
             pass
+        except Exception as e:
+            # ChromaDB might be in a bad state (e.g., after restore)
+            # Try to reinitialize the client
+            logger.warning(f"[RAG] Error clearing index, reinitializing ChromaDB: {e}")
+            try:
+                self._reinitialize_chroma()
+                # Try delete again after reinit
+                try:
+                    self.chroma_client.delete_collection(self.COLLECTION_NAME)
+                except ValueError:
+                    pass  # Collection doesn't exist
+            except Exception as reinit_error:
+                logger.error(f"[RAG] Failed to reinitialize ChromaDB: {reinit_error}")
+                # Continue anyway - collection will be recreated
+            self._collection = None
         # Invalidate cache
         self.invalidate_cache()
+
+    def _reinitialize_chroma(self) -> None:
+        """Reinitialize the ChromaDB client (e.g., after restore)."""
+        import chromadb
+        from chromadb.config import Settings as ChromaSettings
+
+        persist_dir = Path(self.settings.chroma_persist_dir)
+        persist_dir.mkdir(parents=True, exist_ok=True)
+
+        self.chroma_client = chromadb.PersistentClient(
+            path=str(persist_dir),
+            settings=ChromaSettings(anonymized_telemetry=False),
+        )
+        self._collection = None
+        logger.info("[RAG] ChromaDB client reinitialized")
+
+    def shutdown(self) -> None:
+        """Shutdown the RAG engine and release ChromaDB resources.
+
+        This must be called before restoring ChromaDB files to ensure
+        SQLite connections are properly closed.
+        """
+        import gc
+
+        logger.info("[RAG] Shutting down RAG engine...")
+
+        # Clear collection reference
+        self._collection = None
+
+        # Clear ChromaDB client reference - this should release SQLite connections
+        if hasattr(self, 'chroma_client') and self.chroma_client is not None:
+            # ChromaDB doesn't have an explicit close method, but clearing
+            # the reference and forcing GC should release the SQLite connection
+            self.chroma_client = None
+
+        # Clear embedding model to free memory
+        self._embedding_model = None
+
+        # Clear caches
+        self._stats_cache = None
+        self._docs_cache = None
+
+        # Force garbage collection to ensure SQLite connections are released
+        gc.collect()
+
+        logger.info("[RAG] RAG engine shutdown complete")
 
     async def query(
         self,
@@ -1448,6 +1604,20 @@ def get_rag_engine() -> RAGEngine:
     if _rag_engine is None:
         _rag_engine = RAGEngine()
     return _rag_engine
+
+
+def prepare_for_restore() -> None:
+    """Prepare for restore by shutting down the RAG engine.
+
+    This must be called before restoring ChromaDB files to ensure
+    SQLite connections are properly closed. After restore, the engine
+    will be automatically recreated on next access.
+    """
+    global _rag_engine
+    if _rag_engine is not None:
+        _rag_engine.shutdown()
+        _rag_engine = None
+        logger.info("[RAG] Engine prepared for restore - singleton cleared")
 
 
 async def preload_embedding_model() -> None:
