@@ -264,19 +264,38 @@ class OllamaClient:
 
     async def health_check(self) -> bool:
         """Check if Ollama is running and accessible."""
+        from pika.services.metrics import OLLAMA_HEALTHY
+
         try:
             client = await get_http_client(timeout=5.0)
             response = await client.get(f"{self.base_url}/api/tags")
-            return response.status_code == 200
+            is_healthy = response.status_code == 200
+            OLLAMA_HEALTHY.set(1 if is_healthy else 0)
+            return is_healthy
         except httpx.RequestError:
+            OLLAMA_HEALTHY.set(0)
             return False
 
-    async def list_models(self) -> list[ModelInfo]:
-        """List available models in Ollama."""
-        client = await get_http_client(timeout=self.timeout)
-        response = await client.get(f"{self.base_url}/api/tags")
-        response.raise_for_status()
-        data = response.json()
+    async def list_models(self, max_retries: int = 2) -> list[ModelInfo]:
+        """List available models in Ollama with retry logic."""
+
+        async def _fetch_models():
+            client = await get_http_client(timeout=self.timeout)
+            response = await client.get(f"{self.base_url}/api/tags")
+            response.raise_for_status()
+            return response.json()
+
+        try:
+            data = await retry_with_backoff(
+                _fetch_models,
+                max_retries=max_retries,
+                retryable_exceptions=(httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout),
+            )
+        except OllamaConnectionError:
+            # Return empty list if Ollama is unreachable
+            logger.warning("Could not connect to Ollama to list models")
+            return []
+
         models = []
         for m in data.get("models", []):
             models.append(ModelInfo(
@@ -397,6 +416,8 @@ class OllamaClient:
             # Run synchronous request in thread pool to avoid async networking issues
             return await asyncio.to_thread(sync_request)
 
+        from pika.services.metrics import OLLAMA_REQUEST_COUNT, OLLAMA_REQUEST_LATENCY
+
         try:
             import requests as req_lib
             result = await retry_with_backoff(
@@ -406,20 +427,35 @@ class OllamaClient:
             )
             total_elapsed = time_module.time() - start_time
             logger.info(f"[OLLAMA] Generate completed in {total_elapsed:.1f}s")
+
+            # Record success metrics
+            OLLAMA_REQUEST_COUNT.labels(status="success").inc()
+            OLLAMA_REQUEST_LATENCY.observe(total_elapsed)
+
             return result
         except asyncio.CancelledError:
             total_elapsed = time_module.time() - start_time
             logger.info(f"[OLLAMA] Request cancelled after {total_elapsed:.1f}s")
+            OLLAMA_REQUEST_COUNT.labels(status="cancelled").inc()
+            raise
+        except OllamaConnectionError:
+            total_elapsed = time_module.time() - start_time
+            OLLAMA_REQUEST_COUNT.labels(status="connection_error").inc()
+            OLLAMA_REQUEST_LATENCY.observe(total_elapsed)
             raise
         except Exception as e:
             total_elapsed = time_module.time() - start_time
             if "timeout" in str(e).lower() or "timed out" in str(e).lower():
                 logger.error(f"[OLLAMA] Timeout after {total_elapsed:.1f}s")
+                OLLAMA_REQUEST_COUNT.labels(status="timeout").inc()
+                OLLAMA_REQUEST_LATENCY.observe(total_elapsed)
                 raise OllamaTimeoutError(
                     f"Request timed out after {self.timeout}s. "
                     "Try a shorter prompt or increase OLLAMA_TIMEOUT."
                 )
             logger.error(f"[OLLAMA] Unexpected failure after {total_elapsed:.1f}s: {type(e).__name__}: {e}")
+            OLLAMA_REQUEST_COUNT.labels(status="error").inc()
+            OLLAMA_REQUEST_LATENCY.observe(total_elapsed)
             raise
 
     async def generate_stream(
@@ -427,8 +463,15 @@ class OllamaClient:
         prompt: str,
         model: str | None = None,
         system: str | None = None,
+        max_retries: int = 2,
     ) -> AsyncIterator[str]:
-        """Stream a completion from Ollama."""
+        """Stream a completion from Ollama with retry on connection failure.
+
+        Note: Retries only happen before streaming starts. Once tokens begin
+        flowing, the stream cannot be restarted.
+        """
+        from pika.services.metrics import OLLAMA_REQUEST_COUNT
+
         model = model or self.model
         payload = {
             "model": model,
@@ -438,18 +481,54 @@ class OllamaClient:
         if system:
             payload["system"] = system
 
-        async with httpx.AsyncClient(timeout=_make_timeout(self.timeout)) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/api/generate",
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for line in response.aiter_lines():
-                    if line:
-                        data = json.loads(line)
-                        if "response" in data:
-                            yield data["response"]
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                async with httpx.AsyncClient(timeout=_make_timeout(self.timeout)) as client:
+                    async with client.stream(
+                        "POST",
+                        f"{self.base_url}/api/generate",
+                        json=payload,
+                    ) as response:
+                        if response.status_code == 404:
+                            OLLAMA_REQUEST_COUNT.labels(status="model_not_found").inc()
+                            raise OllamaModelNotFoundError(model)
+                        response.raise_for_status()
+
+                        # Once we start yielding, no more retries
+                        async for line in response.aiter_lines():
+                            if line:
+                                data = json.loads(line)
+                                if "response" in data:
+                                    yield data["response"]
+
+                        # Success - record metric and return
+                        OLLAMA_REQUEST_COUNT.labels(status="success").inc()
+                        return
+
+            except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+                last_error = e
+                if attempt < max_retries:
+                    delay = min(1.0 * (2 ** attempt), 5.0)
+                    logger.warning(
+                        f"[OLLAMA] Stream connection failed (attempt {attempt + 1}/{max_retries + 1}), "
+                        f"retrying in {delay:.1f}s: {e}"
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    OLLAMA_REQUEST_COUNT.labels(status="connection_error").inc()
+                    raise OllamaConnectionError(
+                        f"Failed to connect to Ollama after {max_retries + 1} attempts."
+                    )
+            except (OllamaModelNotFoundError, OllamaConnectionError):
+                raise
+            except httpx.TimeoutException:
+                OLLAMA_REQUEST_COUNT.labels(status="timeout").inc()
+                raise OllamaTimeoutError()
+            except Exception as e:
+                OLLAMA_REQUEST_COUNT.labels(status="error").inc()
+                logger.error(f"[OLLAMA] Stream error: {type(e).__name__}: {e}")
+                raise
 
     async def embed(self, text: str, model: str | None = None) -> list[float]:
         """Generate embeddings for text."""

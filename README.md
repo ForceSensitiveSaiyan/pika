@@ -114,6 +114,11 @@ start coverage_html\index.html   # Windows
 - Request latency histograms and counters
 - Query performance metrics (latency, success/error rates, confidence levels)
 
+### Reliability
+- Automatic retry with exponential backoff for Ollama requests
+- Graceful handling of connection failures and timeouts
+- Configurable retry attempts (default: 3 retries)
+
 ## Hardware Requirements
 
 | Component | Minimum (Evaluation) | Recommended (Production) |

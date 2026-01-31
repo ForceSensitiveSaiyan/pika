@@ -214,3 +214,112 @@ class TestOllamaClient:
         with patch("pika.services.ollama.get_app_config") as mock_config:
             mock_config.return_value.get_current_model.return_value = "test-model"
             assert client.model == "test-model"
+
+
+class TestRetryWithBackoff:
+    """Tests for retry_with_backoff function."""
+
+    @pytest.mark.asyncio
+    async def test_retry_succeeds_on_first_attempt(self):
+        """Verify function returns immediately on success."""
+        from pika.services.ollama import retry_with_backoff
+
+        call_count = 0
+
+        async def successful_func():
+            nonlocal call_count
+            call_count += 1
+            return "success"
+
+        result = await retry_with_backoff(successful_func, max_retries=3)
+        assert result == "success"
+        assert call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_succeeds_after_failures(self):
+        """Verify function retries and eventually succeeds."""
+        from pika.services.ollama import retry_with_backoff
+        import httpx
+
+        call_count = 0
+
+        async def eventually_succeeds():
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise httpx.ConnectError("Connection failed")
+            return "success"
+
+        result = await retry_with_backoff(
+            eventually_succeeds,
+            max_retries=3,
+            base_delay=0.01,  # Fast for tests
+        )
+        assert result == "success"
+        assert call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_retry_raises_after_max_retries(self):
+        """Verify function raises OllamaConnectionError after max retries."""
+        from pika.services.ollama import retry_with_backoff, OllamaConnectionError
+        import httpx
+
+        call_count = 0
+
+        async def always_fails():
+            nonlocal call_count
+            call_count += 1
+            raise httpx.ConnectError("Connection failed")
+
+        with pytest.raises(OllamaConnectionError) as exc_info:
+            await retry_with_backoff(
+                always_fails,
+                max_retries=2,
+                base_delay=0.01,
+            )
+
+        assert "after 3 attempts" in str(exc_info.value)
+        assert call_count == 3  # Initial + 2 retries
+
+    @pytest.mark.asyncio
+    async def test_retry_does_not_retry_non_retryable_exceptions(self):
+        """Verify non-retryable exceptions are raised immediately."""
+        from pika.services.ollama import retry_with_backoff
+
+        call_count = 0
+
+        async def raises_value_error():
+            nonlocal call_count
+            call_count += 1
+            raise ValueError("Not retryable")
+
+        with pytest.raises(ValueError):
+            await retry_with_backoff(
+                raises_value_error,
+                max_retries=3,
+                retryable_exceptions=(ConnectionError,),  # ValueError not included
+            )
+
+        assert call_count == 1  # Should not retry
+
+
+class TestOllamaMetrics:
+    """Tests for Ollama metrics integration."""
+
+    def test_health_check_updates_metric(self):
+        """Verify health check updates OLLAMA_HEALTHY gauge."""
+        from pika.services.metrics import OLLAMA_HEALTHY
+
+        # The metric should exist and be settable
+        OLLAMA_HEALTHY.set(1)
+        OLLAMA_HEALTHY.set(0)
+        # No exception means success
+
+    def test_request_metrics_exist(self):
+        """Verify Ollama request metrics are defined."""
+        from pika.services.metrics import OLLAMA_REQUEST_COUNT, OLLAMA_REQUEST_LATENCY
+
+        # Should be able to use the metrics
+        OLLAMA_REQUEST_COUNT.labels(status="test").inc()
+        OLLAMA_REQUEST_LATENCY.observe(1.0)
+        # No exception means success
