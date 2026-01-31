@@ -1313,9 +1313,7 @@ async def restore_backup(
     audit = get_audit_logger()
     audit.log_admin_action("backup_restore", {"filename": file.filename})
 
-    # Always tell user to re-index after restore
-    # (ChromaDB files are included in backup but can't be hot-loaded due to SQLite limitations)
-    message = "Backup restored successfully. Click 'Refresh Index' to rebuild the search index."
+    message = "Backup restored successfully. Documents and search index have been restored."
 
     return {
         "status": "restored",

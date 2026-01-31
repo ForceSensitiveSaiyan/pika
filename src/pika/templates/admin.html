@@ -155,6 +155,17 @@
                     </svg>
                     Refresh Index
                 </button>
+                <button class="btn btn-secondary" id="cancel-index-btn" onclick="cancelIndexing()" style="display: none;">
+                    Cancel
+                </button>
+            </div>
+
+            <!-- Indexing Progress Bar -->
+            <div class="index-progress" id="index-progress">
+                <div class="index-progress-bar">
+                    <div class="index-progress-fill" id="index-progress-fill"></div>
+                </div>
+                <span class="index-progress-text" id="index-progress-text">Preparing...</span>
             </div>
 
             <div class="section-body">
@@ -453,6 +464,8 @@
         loadDocumentsAndStats();  // Combined call for better performance
         loadUsers();
         checkBackupStatus();  // Resume backup progress if one was running
+        checkIndexStatus();   // Resume index progress if one was running
+        checkPostRestore();   // Check if we just restored and need to re-index
         setupUpload();
         checkActivePull();
 
@@ -840,27 +853,153 @@
         await loadDocumentsAndStats();
     }
 
+    let indexPollingInterval = null;
+
     async function refreshIndex() {
         const btn = document.getElementById('refresh-index-btn');
+        const cancelBtn = document.getElementById('cancel-index-btn');
+        const progress = document.getElementById('index-progress');
+        const progressFill = document.getElementById('index-progress-fill');
+        const progressText = document.getElementById('index-progress-text');
+
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Indexing...';
+        btn.innerHTML = '<span class="spinner"></span> Starting...';
+        cancelBtn.style.display = 'inline-flex';
 
         try {
-            const response = await fetch('/api/v1/index', { method: 'POST' });
+            // Start async indexing
+            const response = await fetch('/api/v1/index/start', { method: 'POST' });
             const result = await response.json();
-            await loadDocumentsAndStats();  // Use combined function
-            showToast(`Indexed ${result.total_documents} documents (${result.total_chunks} chunks)`, 'success');
+
+            if (result.status === 'started' || result.status === 'running' || result.status === 'pending') {
+                // Show progress bar
+                progress.classList.add('visible');
+                progressFill.style.width = '0%';
+                progressText.textContent = 'Starting indexing...';
+                btn.innerHTML = '<span class="spinner"></span> Indexing...';
+
+                // Start polling for progress
+                startIndexPolling();
+            } else if (result.status === 'already_running') {
+                // Already running - resume polling
+                progress.classList.add('visible');
+                btn.innerHTML = '<span class="spinner"></span> Indexing...';
+                startIndexPolling();
+            } else if (result.status === 'completed') {
+                // Already completed (was running before)
+                showToast(`Indexed ${result.total_documents || 0} documents (${result.total_chunks || 0} chunks)`, 'success');
+                resetIndexButton();
+                await loadDocumentsAndStats();
+            }
         } catch (error) {
-            showToast('Failed to refresh index', 'error');
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="23 4 23 10 17 10"></polyline>
-                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-                </svg>
-                Refresh Index
-            `;
+            showToast('Failed to start indexing: ' + error.message, 'error');
+            resetIndexButton();
+        }
+    }
+
+    function startIndexPolling() {
+        if (indexPollingInterval) return;
+
+        indexPollingInterval = setInterval(async () => {
+            try {
+                const response = await fetch('/api/v1/index/status');
+                const status = await response.json();
+
+                const progress = document.getElementById('index-progress');
+                const progressFill = document.getElementById('index-progress-fill');
+                const progressText = document.getElementById('index-progress-text');
+
+                if (status.status === 'running') {
+                    const percent = status.percent || 0;
+                    progressFill.style.width = `${percent}%`;
+                    if (status.current_file) {
+                        progressText.textContent = `Processing: ${status.current_file} (${status.processed_documents}/${status.total_documents} files, ${percent}%)`;
+                    } else {
+                        progressText.textContent = `${status.processed_documents}/${status.total_documents} files (${percent}%)`;
+                    }
+                } else if (status.status === 'completed') {
+                    stopIndexPolling();
+                    progressFill.style.width = '100%';
+                    progressText.textContent = 'Indexing complete!';
+                    showToast(`Indexed ${status.total_documents} documents (${status.total_chunks} chunks)`, 'success');
+
+                    setTimeout(() => {
+                        progress.classList.remove('visible');
+                        resetIndexButton();
+                    }, 1500);
+
+                    await loadDocumentsAndStats();
+                } else if (status.status === 'error') {
+                    stopIndexPolling();
+                    showToast(`Indexing failed: ${status.error}`, 'error');
+                    progress.classList.remove('visible');
+                    resetIndexButton();
+                } else if (status.status === 'cancelled') {
+                    stopIndexPolling();
+                    showToast('Indexing cancelled', 'info');
+                    progress.classList.remove('visible');
+                    resetIndexButton();
+                } else if (!status.status || status.status === 'none') {
+                    // No indexing in progress
+                    stopIndexPolling();
+                    progress.classList.remove('visible');
+                    resetIndexButton();
+                }
+            } catch (error) {
+                console.error('Index polling error:', error);
+            }
+        }, 500);
+    }
+
+    function stopIndexPolling() {
+        if (indexPollingInterval) {
+            clearInterval(indexPollingInterval);
+            indexPollingInterval = null;
+        }
+    }
+
+    async function cancelIndexing() {
+        try {
+            await fetch('/api/v1/index/cancel', { method: 'POST' });
+            showToast('Cancelling indexing...', 'info');
+        } catch (error) {
+            console.error('Failed to cancel indexing:', error);
+        }
+    }
+
+    function resetIndexButton() {
+        const btn = document.getElementById('refresh-index-btn');
+        const cancelBtn = document.getElementById('cancel-index-btn');
+        btn.disabled = false;
+        btn.innerHTML = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+            </svg>
+            Refresh Index
+        `;
+        cancelBtn.style.display = 'none';
+    }
+
+    // Check for existing indexing on page load
+    async function checkIndexStatus() {
+        try {
+            const response = await fetch('/api/v1/index/status');
+            const status = await response.json();
+
+            if (status.status === 'running' || status.status === 'pending') {
+                const btn = document.getElementById('refresh-index-btn');
+                const cancelBtn = document.getElementById('cancel-index-btn');
+                const progress = document.getElementById('index-progress');
+
+                btn.disabled = true;
+                btn.innerHTML = '<span class="spinner"></span> Indexing...';
+                cancelBtn.style.display = 'inline-flex';
+                progress.classList.add('visible');
+                startIndexPolling();
+            }
+        } catch (error) {
+            console.error('Failed to check index status:', error);
         }
     }
 
@@ -940,7 +1079,7 @@
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
-    function showToast(message, type = 'info') {
+    function showToast(message, type = 'info', duration = 3000) {
         const container = document.getElementById('toast-container');
         const toast = document.createElement('div');
         toast.className = `toast toast-${type}`;
@@ -950,7 +1089,7 @@
         setTimeout(() => {
             toast.classList.add('hiding');
             setTimeout(() => toast.remove(), 300);
-        }, 3000);
+        }, duration);
     }
 
     // ==================== Users ====================
@@ -1172,8 +1311,10 @@
     // ==================== Backup & Restore ====================
 
     let backupPollingInterval = null;
+    let backupDownloadTriggered = false;  // Prevent multiple downloads
 
     async function downloadBackup() {
+        backupDownloadTriggered = false;  // Reset flag when starting new backup
         const btn = document.getElementById('backup-btn');
         const progress = document.getElementById('backup-progress');
         const progressFill = document.getElementById('backup-progress-fill');
@@ -1234,19 +1375,23 @@
                 progressText.textContent = `${backup.processed_files} / ${backup.total_files} files (${backup.progress}%)`;
 
                 if (backup.status === 'completed') {
+                    // Prevent multiple completions from race conditions
+                    if (backupDownloadTriggered) return;
+
                     stopBackupPolling();
                     progressText.textContent = 'Backup complete! Starting download...';
 
-                    // Trigger download
-                    setTimeout(() => {
-                        downloadBackupFile();
-                        // Clear backup status after download starts
-                        setTimeout(async () => {
-                            await fetch('/admin/backup', { method: 'DELETE' });
-                            progress.classList.remove('visible');
-                            resetBackupButton();
-                        }, 1000);
-                    }, 500);
+                    // Trigger download (sets backupDownloadTriggered flag)
+                    downloadBackupFile();
+
+                    // Wait longer before cleanup to ensure download completes
+                    // The backup file is ~MBs, give it time to transfer
+                    setTimeout(async () => {
+                        progress.classList.remove('visible');
+                        resetBackupButton();
+                        // Don't auto-delete - next backup will clean up
+                        // This prevents race condition where file is deleted before download completes
+                    }, 2000);
 
                 } else if (backup.status === 'error') {
                     stopBackupPolling();
@@ -1269,12 +1414,30 @@
     }
 
     function downloadBackupFile() {
-        const link = document.createElement('a');
-        link.href = '/admin/backup/download';
-        link.download = '';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        // Prevent multiple download attempts
+        if (backupDownloadTriggered) return;
+        backupDownloadTriggered = true;
+
+        // Mark this backup as downloaded in session storage to prevent re-download on refresh
+        sessionStorage.setItem('pika_backup_downloaded', Date.now().toString());
+
+        // Use an iframe to download without scrolling or navigation
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = '/admin/backup/download';
+        document.body.appendChild(iframe);
+
+        // Clean up iframe and delete backup after download has time to complete
+        setTimeout(async () => {
+            document.body.removeChild(iframe);
+            // Delete the backup from server after download
+            try {
+                await fetch('/admin/backup', { method: 'DELETE' });
+            } catch (e) {
+                console.warn('Failed to clean up backup:', e);
+            }
+        }, 5000);
+
         showToast('Backup download started', 'success');
     }
 
@@ -1291,21 +1454,47 @@
         `;
     }
 
+    // Check if we just restored and show appropriate message
+    function checkPostRestore() {
+        if (sessionStorage.getItem('pika_just_restored') === 'true') {
+            sessionStorage.removeItem('pika_just_restored');
+            sessionStorage.removeItem('pika_index_restored');  // Clear but don't use
+
+            setTimeout(() => {
+                showToast('Restore complete! Documents and search index have been restored.', 'success', 5000);
+            }, 500);
+        }
+    }
+
     // Check for existing backup on page load
     async function checkBackupStatus() {
         try {
             const response = await fetch('/admin/backup/status');
             const status = await response.json();
 
-            if (status.active && (status.backup.status === 'preparing' || status.backup.status === 'running')) {
-                // Resume showing progress
+            if (status.active && status.backup) {
                 const btn = document.getElementById('backup-btn');
                 const progress = document.getElementById('backup-progress');
 
-                btn.disabled = true;
-                btn.innerHTML = '<span class="spinner"></span> Backup in progress...';
-                progress.classList.add('visible');
-                startBackupPolling();
+                if (status.backup.status === 'preparing' || status.backup.status === 'running') {
+                    // Resume showing progress
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="spinner"></span> Backup in progress...';
+                    progress.classList.add('visible');
+                    startBackupPolling();
+                } else if (status.backup.status === 'completed') {
+                    // Check if we already downloaded this backup recently (within last 60s)
+                    const lastDownload = sessionStorage.getItem('pika_backup_downloaded');
+                    if (lastDownload && (Date.now() - parseInt(lastDownload)) < 60000) {
+                        // Already downloaded recently, just clean up
+                        await fetch('/admin/backup', { method: 'DELETE' });
+                        return;
+                    }
+
+                    // Backup completed while away - offer download
+                    showToast('A backup is ready for download', 'success');
+                    downloadBackupFile();
+                }
             }
         } catch (error) {
             console.error('Failed to check backup status:', error);
@@ -1342,7 +1531,7 @@
         }
 
         // Confirm restore
-        if (!confirm('WARNING: This will overwrite all existing data including documents, index, and user accounts.\n\nAre you sure you want to restore from this backup?\n\nNote: PIKA will need to be restarted after restore.')) {
+        if (!confirm('WARNING: This will overwrite all existing data including documents, index, and user accounts.\n\nAre you sure you want to restore from this backup?\n\nThe page will reload after restore completes.')) {
             return;
         }
 
@@ -1366,10 +1555,15 @@
             const result = await response.json();
             showToast(result.message, 'success');
 
-            // Show restart reminder
+            // Set flag so we show appropriate message after reload
+            // Store whether index was restored to show correct message
+            sessionStorage.setItem('pika_just_restored', 'true');
+            sessionStorage.setItem('pika_index_restored', result.index_restored ? 'true' : 'false');
+
+            // Reload the page to pick up restored data
             setTimeout(() => {
-                alert('Backup restored successfully.\n\nPlease restart PIKA to load the restored data.');
-            }, 500);
+                window.location.reload();
+            }, 1500);
 
         } catch (error) {
             showToast(`Restore failed: ${error.message}`, 'error');
