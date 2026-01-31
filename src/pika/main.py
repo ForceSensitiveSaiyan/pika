@@ -4,12 +4,15 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from pythonjsonlogger import jsonlogger
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -19,15 +22,43 @@ from pika import __version__
 from pika.api.routes import router as api_router
 from pika.api.web import router as web_router
 from pika.config import get_settings
+from pika.services.metrics import (
+    REQUEST_COUNT,
+    REQUEST_LATENCY,
+    set_app_info,
+)
 
-# Configure logging
+# Configure structured JSON logging
 settings = get_settings()
 log_level = logging.DEBUG if settings.debug else logging.INFO
+
+
+class CustomJsonFormatter(jsonlogger.JsonFormatter):
+    """Custom JSON formatter with additional fields."""
+
+    def add_fields(self, log_record, record, message_dict):
+        super().add_fields(log_record, record, message_dict)
+        log_record["timestamp"] = self.formatTime(record)
+        log_record["level"] = record.levelname
+        log_record["logger"] = record.name
+        if not log_record.get("message"):
+            log_record["message"] = record.getMessage()
+
+
+# Use JSON logging in production, human-readable in debug
+if settings.debug:
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    formatter = logging.Formatter(log_format)
+else:
+    formatter = CustomJsonFormatter()
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(formatter)
+
 logging.basicConfig(
     level=log_level,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-    force=True,  # Override any existing logging config
+    handlers=[handler],
+    force=True,
 )
 
 # Explicitly set log level for pika modules to ensure they're visible
@@ -90,6 +121,9 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Max concurrent queries: {settings.max_concurrent_queries}")
 
+    # Initialize metrics
+    set_app_info(__version__, settings.ollama_model)
+
     # Pre-load embedding model (runs in background to not block startup)
     asyncio.create_task(preload_embedding_model())
 
@@ -124,6 +158,46 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
+
+    # Add metrics middleware
+    @app.middleware("http")
+    async def metrics_middleware(request: Request, call_next):
+        """Record request metrics for Prometheus."""
+        # Skip metrics endpoint itself to avoid recursion
+        if request.url.path == "/metrics":
+            return await call_next(request)
+
+        start_time = time.time()
+        response = await call_next(request)
+        duration = time.time() - start_time
+
+        # Normalize endpoint path for metrics (avoid high cardinality)
+        endpoint = request.url.path
+        # Group dynamic paths
+        if endpoint.startswith("/api/v1/"):
+            endpoint = "/api/v1/" + endpoint.split("/")[3] if len(endpoint.split("/")) > 3 else endpoint
+
+        REQUEST_COUNT.labels(
+            method=request.method,
+            endpoint=endpoint,
+            status_code=response.status_code,
+        ).inc()
+
+        REQUEST_LATENCY.labels(
+            method=request.method,
+            endpoint=endpoint,
+        ).observe(duration)
+
+        return response
+
+    # Prometheus metrics endpoint
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        """Prometheus metrics endpoint."""
+        return PlainTextResponse(
+            content=generate_latest(),
+            media_type=CONTENT_TYPE_LATEST,
+        )
 
     # Mount static files
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

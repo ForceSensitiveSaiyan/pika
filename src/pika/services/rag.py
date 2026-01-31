@@ -1298,6 +1298,8 @@ class RAGEngine:
     ) -> QueryResult:
         """Query the RAG system with a question."""
         import time as time_module
+        from pika.services.metrics import QUERY_COUNT, QUERY_LATENCY
+
         query_start = time_module.time()
         logger.info(f"[RAG.query] Starting query: '{question[:50]}...'")
 
@@ -1310,6 +1312,7 @@ class RAGEngine:
             doc_count = 0
 
         if doc_count == 0:
+            QUERY_COUNT.labels(status="no_documents", confidence="none").inc()
             return QueryResult(
                 answer="No documents indexed yet. Upload documents and click Refresh Index.",
                 sources=[],
@@ -1399,6 +1402,7 @@ Answer based on the context above:"""
                 total_elapsed = time_module.time() - query_start
                 logger.info(f"[RAG.query] Ollama completed in {ollama_elapsed:.1f}s, total query time: {total_elapsed:.1f}s")
             except OllamaConnectionError:
+                QUERY_COUNT.labels(status="ollama_connection_error", confidence="none").inc()
                 return QueryResult(
                     answer=(
                         "Unable to connect to the AI model service (Ollama). "
@@ -1408,6 +1412,7 @@ Answer based on the context above:"""
                     confidence=Confidence.NONE,
                 )
             except OllamaModelNotFoundError as e:
+                QUERY_COUNT.labels(status="ollama_model_not_found", confidence="none").inc()
                 return QueryResult(
                     answer=(
                         f"The model '{e.model}' is not available. "
@@ -1417,6 +1422,7 @@ Answer based on the context above:"""
                     confidence=Confidence.NONE,
                 )
             except OllamaTimeoutError:
+                QUERY_COUNT.labels(status="ollama_timeout", confidence="none").inc()
                 return QueryResult(
                     answer=(
                         "The request took too long and timed out. "
@@ -1425,6 +1431,11 @@ Answer based on the context above:"""
                     sources=sources,
                     confidence=Confidence.NONE,
                 )
+
+        # Record metrics
+        duration = time_module.time() - query_start
+        QUERY_LATENCY.observe(duration)
+        QUERY_COUNT.labels(status="success", confidence=confidence.value).inc()
 
         return QueryResult(
             answer=answer,

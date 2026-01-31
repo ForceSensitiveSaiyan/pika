@@ -108,6 +108,12 @@ start coverage_html\index.html   # Windows
 - Feedback stored for analytics purposes
 - Per-query rating with question/answer context
 
+### Observability
+- Prometheus metrics endpoint at `/metrics`
+- Structured JSON logging in production (human-readable in debug mode)
+- Request latency histograms and counters
+- Query performance metrics (latency, success/error rates, confidence levels)
+
 ## Hardware Requirements
 
 | Component | Minimum (Evaluation) | Recommended (Production) |
@@ -289,6 +295,43 @@ docker compose logs ollama
 # Follow logs in real-time
 docker compose logs -f
 ```
+
+## Observability
+
+### Prometheus Metrics
+
+PIKA exposes Prometheus metrics at `/metrics`. Available metrics:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `pika_http_requests_total` | Counter | HTTP requests by method, endpoint, status |
+| `pika_http_request_duration_seconds` | Histogram | Request latency |
+| `pika_queries_total` | Counter | RAG queries by status and confidence |
+| `pika_query_duration_seconds` | Histogram | Query processing time |
+| `pika_active_queries` | Gauge | Queries currently processing |
+| `pika_queued_queries` | Gauge | Queries waiting in queue |
+| `pika_index_documents_total` | Gauge | Documents in index |
+| `pika_index_chunks_total` | Gauge | Chunks in index |
+| `pika_ollama_healthy` | Gauge | Ollama health status |
+
+Example Prometheus scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: 'pika'
+    static_configs:
+      - targets: ['localhost:8000']
+```
+
+### Structured Logging
+
+In production (DEBUG=false), logs are output as JSON for easy parsing:
+
+```json
+{"timestamp": "2024-01-15 10:30:45", "level": "INFO", "logger": "pika.main", "message": "Starting PIKA v0.1.0"}
+```
+
+In development (DEBUG=true), logs use human-readable format.
 
 ## License
 

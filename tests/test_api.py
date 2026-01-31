@@ -4,6 +4,22 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
 
+class TestMetricsEndpoint:
+    """Tests for the Prometheus metrics endpoint."""
+
+    def test_metrics_returns_prometheus_format(self, test_client):
+        """Verify /metrics returns Prometheus format."""
+        response = test_client.get("/metrics")
+
+        assert response.status_code == 200
+        assert "text/plain" in response.headers["content-type"]
+        # Check for expected metrics
+        content = response.text
+        assert "pika_http_requests_total" in content
+        assert "pika_http_request_duration_seconds" in content
+        assert "pika_info" in content
+
+
 class TestHealthEndpoint:
     """Tests for the health check endpoint."""
 
