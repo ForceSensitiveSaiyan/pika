@@ -824,9 +824,14 @@ class RAGEngine:
             except Exception as e:
                 error_str = str(e).lower()
                 if "readonly" in error_str or "read-only" in error_str or "code: 1032" in error_str:
+                    import gc
                     logger.warning("[RAG] ChromaDB readonly/moved error - attempting recovery")
 
-                    # First try: fix permissions and reinitialize
+                    # Release current client before recovery to free file handles
+                    self.chroma_client = None
+                    gc.collect()
+
+                    # First try: fix permissions (includes journal cleanup) and reinitialize
                     self._fix_chroma_permissions()
                     self._reinitialize_chroma()
 
@@ -861,6 +866,23 @@ class RAGEngine:
         try:
             # Fix the directory itself
             persist_dir.chmod(0o777)
+
+            # Delete SQLite journal files first - these can cause "readonly database" errors
+            # if they contain stale state from a backup or different environment
+            journal_extensions = ["-wal", "-shm", "-journal"]
+            journals_deleted = 0
+            for root, dirs, files in os.walk(persist_dir):
+                for f in files:
+                    if any(f.endswith(ext) for ext in journal_extensions):
+                        journal_path = Path(root) / f
+                        try:
+                            journal_path.unlink()
+                            journals_deleted += 1
+                            logger.debug(f"[RAG] Deleted journal file: {journal_path}")
+                        except Exception as e:
+                            logger.debug(f"[RAG] Could not delete journal file {f}: {e}")
+            if journals_deleted > 0:
+                logger.info(f"[RAG] Deleted {journals_deleted} SQLite journal file(s)")
 
             # Fix all subdirectories and files
             for root, dirs, files in os.walk(persist_dir):

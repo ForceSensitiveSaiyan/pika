@@ -1241,6 +1241,23 @@ async def restore_backup(
 
                 logger.info(f"[Restore] ChromaDB restored to {chroma_dir}: {files_fixed} files, {dirs_fixed} dirs (permissions fixed)")
 
+                # Delete SQLite journal files - these can cause "readonly database" errors
+                # if they contain stale state from the backup source environment
+                journal_extensions = ["-wal", "-shm", "-journal"]
+                journals_deleted = 0
+                for root, dirs, files in os.walk(chroma_dir):
+                    for f in files:
+                        if any(f.endswith(ext) for ext in journal_extensions):
+                            journal_path = Path(root) / f
+                            try:
+                                journal_path.unlink()
+                                journals_deleted += 1
+                                logger.debug(f"[Restore] Deleted journal file: {journal_path}")
+                            except Exception as e:
+                                logger.warning(f"[Restore] Failed to delete journal file {journal_path}: {e}")
+                if journals_deleted > 0:
+                    logger.info(f"[Restore] Deleted {journals_deleted} SQLite journal file(s)")
+
             # Restore config.json
             if "config.json" in namelist:
                 with zf.open("config.json") as src:
