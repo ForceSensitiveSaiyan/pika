@@ -225,7 +225,10 @@ In each environment, click **Add secret** for:
 ```bash
 git clone https://github.com/yourusername/pika.git ~/pika
 cd ~/pika
-docker compose up -d
+
+# Use production compose (pulls pre-built image from GitHub Container Registry)
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 **Step 6: Deploy**
@@ -235,7 +238,37 @@ docker compose up -d
 3. Select environment (`production` or `staging`)
 4. Click **Run workflow**
 
-The workflow will SSH into your server, pull latest code, and restart containers.
+The workflow pulls the latest image from GHCR and restarts containers.
+
+**Adding a New Environment (additional VPS)**
+
+To add another server (e.g., `staging`, `eu-west`):
+
+1. **On the new VPS** - clone and start:
+   ```bash
+   git clone https://github.com/yourusername/pika.git ~/pika
+   cd ~/pika
+   docker compose -f docker-compose.prod.yml pull
+   docker compose -f docker-compose.prod.yml up -d
+   ```
+
+2. **In GitHub** - create environment and add secrets:
+   - Go to **Settings → Environments → New environment**
+   - Name it (e.g., `staging`)
+   - Add the 5 secrets (`VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, `VPS_PORT`, `VPS_APP_PATH`)
+
+3. **Update the workflow** - add the new environment to the dropdown:
+   ```yaml
+   # .github/workflows/deploy.yml
+   options:
+     - staging
+     - production
+     - eu-west  # ← add new environments here
+   ```
+
+4. **Deploy** - select the new environment from the dropdown
+
+All environments pull the same pre-built image from GHCR, so deploys are fast and consistent.
 
 ## Configuration
 
