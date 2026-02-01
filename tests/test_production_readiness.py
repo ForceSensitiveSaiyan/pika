@@ -93,12 +93,14 @@ class TestQueryStatusCleanup:
 
     def test_cleanup_expired_queries(self):
         """Test that expired queries are cleaned up."""
+        from pika.config import get_settings
         from pika.services.rag import (
             QueryStatus,
             _active_queries,
             cleanup_expired_queries,
-            QUERY_STATUS_TTL,
         )
+
+        query_status_ttl = get_settings().query_status_ttl
 
         # Clear state
         _active_queries.clear()
@@ -109,7 +111,7 @@ class TestQueryStatusCleanup:
             question="Old?",
             status="completed",
         )
-        old_status.completed_at = datetime.now() - timedelta(seconds=QUERY_STATUS_TTL + 100)
+        old_status.completed_at = datetime.now() - timedelta(seconds=query_status_ttl + 100)
         _active_queries["old_user"] = old_status
 
         # Add a recent completed query
@@ -252,15 +254,18 @@ class TestFeedbackLimit:
     """Tests for feedback item limit."""
 
     def test_feedback_limit_enforced(self):
-        """Test that feedback is capped at MAX_FEEDBACK_ITEMS."""
-        from pika.services.history import HistoryService, MAX_FEEDBACK_ITEMS
+        """Test that feedback is capped at max_feedback_items config."""
+        from pika.config import get_settings
+        from pika.services.history import HistoryService
         import tempfile
+
+        max_feedback_items = get_settings().max_feedback_items
 
         with tempfile.TemporaryDirectory() as tmpdir:
             service = HistoryService(data_dir=Path(tmpdir))
 
             # Add more than max feedback items
-            for i in range(MAX_FEEDBACK_ITEMS + 50):
+            for i in range(max_feedback_items + 50):
                 service.add_feedback(
                     query_id=f"q_{i}",
                     question=f"Question {i}",
@@ -269,7 +274,7 @@ class TestFeedbackLimit:
                 )
 
             # Check that we're at the limit
-            assert len(service._feedback) == MAX_FEEDBACK_ITEMS
+            assert len(service._feedback) == max_feedback_items
 
 
 class TestAuditLogRotation:
@@ -277,7 +282,7 @@ class TestAuditLogRotation:
 
     def test_rotation_trigger(self):
         """Test that rotation is triggered when log exceeds max size."""
-        from pika.services.audit import AuditLogger, MAX_LOG_SIZE
+        from pika.services.audit import AuditLogger
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:

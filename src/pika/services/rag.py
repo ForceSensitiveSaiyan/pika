@@ -33,14 +33,6 @@ from pika.services.ollama import (
 
 logger = logging.getLogger(__name__)
 
-# Cache TTL in seconds
-STATS_CACHE_TTL = 60  # 1 minute cache for stats
-DOCS_CACHE_TTL = 60   # 1 minute cache for indexed documents list
-
-# Query status cleanup settings
-QUERY_STATUS_TTL = 300  # 5 minutes - completed queries are cleaned up after this
-QUERY_CLEANUP_INTERVAL = 60  # Run cleanup every 60 seconds
-
 
 class Confidence(str, Enum):
     """Confidence level for query results."""
@@ -336,17 +328,20 @@ def cleanup_expired_queries() -> int:
     now = datetime.now()
     expired_keys = []
 
+    settings = get_settings()
+    query_status_ttl = settings.query_status_ttl
+
     for key, status in _active_queries.items():
         # Only clean up terminal states
         if status.status in ("completed", "error", "cancelled"):
             if status.completed_at:
                 age = (now - status.completed_at).total_seconds()
-                if age > QUERY_STATUS_TTL:
+                if age > query_status_ttl:
                     expired_keys.append(key)
             else:
                 # No completed_at set but in terminal state - use started_at as fallback
                 age = (now - status.started_at).total_seconds()
-                if age > QUERY_STATUS_TTL * 2:  # More lenient for legacy entries
+                if age > query_status_ttl * 2:  # More lenient for legacy entries
                     expired_keys.append(key)
 
     for key in expired_keys:
@@ -553,7 +548,7 @@ async def _process_queue() -> None:
 
         try:
             # Periodic cleanup of expired query statuses
-            if time.time() - last_cleanup_time > QUERY_CLEANUP_INTERVAL:
+            if time.time() - last_cleanup_time > settings.query_cleanup_interval:
                 cleanup_expired_queries()
                 last_cleanup_time = time.time()
 
@@ -1297,7 +1292,7 @@ class RAGEngine:
         """Get current index statistics (cached for performance)."""
         # Check cache first
         with self._cache_lock:
-            if self._stats_cache and (time.time() - self._stats_cache_time) < STATS_CACHE_TTL:
+            if self._stats_cache and (time.time() - self._stats_cache_time) < self.settings.stats_cache_ttl:
                 return self._stats_cache
 
         # Cache miss - compute stats
@@ -1328,7 +1323,7 @@ class RAGEngine:
         """Get list of indexed documents with their chunk counts (cached for performance)."""
         # Check cache first
         with self._cache_lock:
-            if self._docs_cache is not None and (time.time() - self._docs_cache_time) < DOCS_CACHE_TTL:
+            if self._docs_cache is not None and (time.time() - self._docs_cache_time) < self.settings.stats_cache_ttl:
                 return self._docs_cache
 
         # Cache miss - compute document list

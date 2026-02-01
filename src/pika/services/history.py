@@ -11,9 +11,6 @@ from pika.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-MAX_HISTORY_ITEMS = 50
-MAX_FEEDBACK_ITEMS = 500  # Keep more feedback for analytics purposes
-
 
 class HistoryService:
     """Service for managing query history and feedback."""
@@ -23,6 +20,8 @@ class HistoryService:
         self.data_dir = data_dir or Path(settings.chroma_persist_dir).parent
         self.history_path = self.data_dir / "history.json"
         self.feedback_path = self.data_dir / "feedback.json"
+        self._max_history_items = settings.max_history_items
+        self._max_feedback_items = settings.max_feedback_items
         self._lock = Lock()
         self._history: list[dict] = []
         self._feedback: list[dict] = []
@@ -93,8 +92,8 @@ class HistoryService:
             self._history.insert(0, entry)
 
             # Trim to max size
-            if len(self._history) > MAX_HISTORY_ITEMS:
-                self._history = self._history[:MAX_HISTORY_ITEMS]
+            if len(self._history) > self._max_history_items:
+                self._history = self._history[:self._max_history_items]
 
             self._save_history()
             return query_id
@@ -145,8 +144,8 @@ class HistoryService:
             self._feedback.append(entry)
 
             # Trim to max size (keep most recent)
-            if len(self._feedback) > MAX_FEEDBACK_ITEMS:
-                self._feedback = self._feedback[-MAX_FEEDBACK_ITEMS:]
+            if len(self._feedback) > self._max_feedback_items:
+                self._feedback = self._feedback[-self._max_feedback_items:]
 
             self._save_feedback()
 

@@ -332,13 +332,14 @@ __all__ = [
 ]
 
 
-def _make_timeout(seconds: int) -> httpx.Timeout:
+def _make_timeout(seconds: int, settings: Settings | None = None) -> httpx.Timeout:
     """Create httpx timeout with extended read timeout for LLM generation."""
+    settings = settings or get_settings()
     return httpx.Timeout(
-        connect=10.0,
+        connect=settings.http_connect_timeout,
         read=float(seconds),
-        write=10.0,
-        pool=10.0,
+        write=settings.http_write_timeout,
+        pool=settings.http_pool_timeout,
     )
 
 

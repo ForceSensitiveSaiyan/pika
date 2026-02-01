@@ -12,7 +12,6 @@ from pika.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Log rotation settings
-MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_BACKUP_COUNT = 5  # Keep 5 backup files
 
 
@@ -22,6 +21,7 @@ class AuditLogger:
     def __init__(self, log_path: Path | None = None):
         settings = get_settings()
         self.log_path = log_path or Path(settings.audit_log_path)
+        self._max_log_size = settings.audit_log_max_size_mb * 1024 * 1024
         self._lock = Lock()
         self._write_count = 0  # Track writes to avoid checking size every time
         self._ensure_log_dir()
@@ -36,7 +36,7 @@ class AuditLogger:
             if not self.log_path.exists():
                 return
 
-            if self.log_path.stat().st_size < MAX_LOG_SIZE:
+            if self.log_path.stat().st_size < self._max_log_size:
                 return
 
             # Rotate: audit.log -> audit.log.1 -> audit.log.2 -> ...
@@ -54,7 +54,7 @@ class AuditLogger:
                 backup_path.unlink()
             self.log_path.rename(backup_path)
 
-            logger.info(f"[Audit] Rotated log file (exceeded {MAX_LOG_SIZE // (1024*1024)}MB)")
+            logger.info(f"[Audit] Rotated log file (exceeded {self._max_log_size // (1024*1024)}MB)")
 
         except Exception as e:
             logger.error(f"Failed to rotate audit log: {e}")

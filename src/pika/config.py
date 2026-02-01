@@ -80,6 +80,24 @@ class Settings(BaseSettings):
     query_cache_ttl: int = 300  # 5 minutes
     query_cache_max_size: int = 100
 
+    # Internal cache settings (stats, document lists)
+    stats_cache_ttl: int = 60  # 1 minute
+    query_status_ttl: int = 300  # 5 minutes - completed queries cleaned up after this
+    query_cleanup_interval: int = 60  # Seconds between cleanup runs
+
+    # History settings
+    max_history_items: int = 50  # History entries per user
+    max_feedback_items: int = 500  # Total feedback entries to keep
+
+    # Audit log settings
+    audit_log_max_size_mb: int = 10  # Rotate audit log after this size
+
+    # HTTP client settings (for Ollama connections)
+    http_connect_timeout: float = 10.0
+    http_read_timeout: float = 600.0  # 10 minutes for long generations
+    http_write_timeout: float = 30.0
+    http_pool_timeout: float = 30.0
+
     # Validators for numeric settings
     @field_validator("max_concurrent_queries", "max_queued_per_user", "max_queue_size")
     @classmethod
