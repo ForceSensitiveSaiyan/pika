@@ -510,7 +510,8 @@ class TestQueryCancellation:
 
         assert is_query_running() is False
 
-    def test_cancel_query_when_none_running(self):
+    @pytest.mark.asyncio
+    async def test_cancel_query_when_none_running(self):
         """Verify cancelling when no query running returns False."""
         from pika.services.rag import cancel_query
 
@@ -518,7 +519,7 @@ class TestQueryCancellation:
         import pika.services.rag as rag_module
         rag_module._query_task = None
 
-        result = cancel_query()
+        result = await cancel_query()
         assert result is False
 
     def test_clear_query_status(self):

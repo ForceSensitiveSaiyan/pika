@@ -589,7 +589,8 @@ async def _process_queue() -> None:
                         try:
                             await _execute_query(q)
                         finally:
-                            _running_queries.discard(q.query_id)
+                            async with _queue_lock:
+                                _running_queries.discard(q.query_id)
 
                     asyncio.create_task(run_and_cleanup(queued))
 
@@ -1855,7 +1856,7 @@ def is_query_running(username: str | None = None) -> bool:
     return task is not None and not task.done()
 
 
-def cancel_query(username: str | None = None) -> bool:
+async def cancel_query(username: str | None = None) -> bool:
     """Cancel the currently running or queued query for a user.
 
     Returns True if a query was cancelled, False if no query was found.
@@ -1886,12 +1887,13 @@ def cancel_query(username: str | None = None) -> bool:
         return True
 
     # Also check if query is tracked as running in queue system
-    if query.query_id in _running_queries:
-        query.status = "cancelled"
-        query.error = "Query was cancelled by user"
-        _running_queries.discard(query.query_id)
-        logger.info(f"Query cancelled by user: {username or 'anonymous'}")
-        return True
+    async with _queue_lock:
+        if query.query_id in _running_queries:
+            query.status = "cancelled"
+            query.error = "Query was cancelled by user"
+            _running_queries.discard(query.query_id)
+            logger.info(f"Query cancelled by user: {username or 'anonymous'}")
+            return True
 
     return False
 
@@ -1959,7 +1961,8 @@ async def start_query_task(
                 try:
                     await _execute_query(queued)
                 finally:
-                    _running_queries.discard(query_id)
+                    async with _queue_lock:
+                        _running_queries.discard(query_id)
 
             asyncio.create_task(run_and_cleanup())
             logger.info(f"[Queue] Query {query_id} started immediately (slots: {len(_running_queries)}/{settings.max_concurrent_queries})")

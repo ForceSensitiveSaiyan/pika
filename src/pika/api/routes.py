@@ -897,7 +897,7 @@ async def cancel_running_query(
             message="No query is currently running or queued",
         )
 
-    cancelled = cancel_query(username)
+    cancelled = await cancel_query(username)
     if cancelled:
         return CancelQueryResponse(
             cancelled=True,
