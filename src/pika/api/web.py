@@ -679,7 +679,10 @@ async def delete_document(
         docs_dir = docs_dir.resolve()
         if not str(file_path).startswith(str(docs_dir)):
             raise HTTPException(status_code=400, detail="Invalid filename")
-    except Exception:
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning("Path validation failed for filename %r: %s", filename, e)
         raise HTTPException(status_code=400, detail="Invalid filename")
 
     if not file_path.exists():

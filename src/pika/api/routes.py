@@ -147,7 +147,8 @@ async def health_check(
             document_count=stats.total_documents,
             chunk_count=stats.total_chunks,
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to get index stats for health check: %s", e)
         index_health = IndexHealthResponse(document_count=0, chunk_count=0)
 
     # Check disk space
@@ -161,7 +162,8 @@ async def health_check(
             free_gb=round(free_gb, 2),
             warning=free_gb < 1.0,
         )
-    except Exception:
+    except Exception as e:
+        logger.warning("Failed to check disk space at %s: %s", data_dir, e)
         disk_health = DiskHealthResponse(
             data_dir=str(data_dir),
             free_bytes=0,
