@@ -99,7 +99,8 @@ class TestQueryStatusIsolation:
 class TestQueryCancellationIsolation:
     """Test that query cancellation is isolated per user."""
 
-    def test_cancel_only_affects_own_query(self):
+    @pytest.mark.asyncio
+    async def test_cancel_only_affects_own_query(self):
         """Cancelling a query only affects the requesting user."""
         # Note: cancel_query checks if status is "running" or "queued"
         # Set up statuses that can be cancelled
@@ -118,7 +119,7 @@ class TestQueryCancellationIsolation:
         _set_query_status(status2, "user2")
 
         # user1 cancels their query
-        result = cancel_query("user1")
+        result = await cancel_query("user1")
 
         # user1's query should be cancelled (status cleared or changed)
         # Note: cancel_query behavior depends on implementation
@@ -133,7 +134,8 @@ class TestQueryCancellationIsolation:
         clear_query_status("user1")
         clear_query_status("user2")
 
-    def test_cannot_cancel_other_user_query(self):
+    @pytest.mark.asyncio
+    async def test_cannot_cancel_other_user_query(self):
         """Users cannot cancel other users' queries."""
         status1 = QueryStatus(
             query_id="q1",
@@ -144,7 +146,7 @@ class TestQueryCancellationIsolation:
         _set_query_status(status1, "user1")
 
         # user2 tries to cancel (but they have no query)
-        result = cancel_query("user2")
+        result = await cancel_query("user2")
         assert result is False
 
         # user1's query should be unaffected
