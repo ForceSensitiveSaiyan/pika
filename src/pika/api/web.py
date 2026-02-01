@@ -840,6 +840,35 @@ def is_backup_running() -> bool:
     return _backup_task is not None and not _backup_task.done()
 
 
+def _cleanup_old_backups(backup_dir: Path, keep_count: int) -> None:
+    """Remove old backups, keeping only the most recent ones.
+
+    Args:
+        backup_dir: Directory containing backup files
+        keep_count: Number of backups to keep (0 = keep all)
+    """
+    if keep_count <= 0:
+        return  # Unlimited retention
+
+    if not backup_dir.exists():
+        return
+
+    # Find all backup files, sorted by modification time (newest first)
+    backup_files = sorted(
+        backup_dir.glob("pika_backup_*.zip"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    # Delete old backups beyond retention count
+    for old_backup in backup_files[keep_count:]:
+        try:
+            old_backup.unlink()
+            logger.info(f"Deleted old backup: {old_backup.name}")
+        except Exception as e:
+            logger.warning(f"Failed to delete old backup {old_backup.name}: {e}")
+
+
 async def _run_backup(settings: Settings) -> None:
     """Run backup in background thread."""
     global _active_backup, _backup_file_path
@@ -950,6 +979,9 @@ async def _run_backup(settings: Settings) -> None:
         _active_backup.completed_at = datetime.now()
         logger.info(f"Backup completed: {backup_path}")
 
+        # Clean up old backups based on retention policy
+        _cleanup_old_backups(backup_dir, settings.backup_retention_count)
+
     except Exception as e:
         logger.error(f"Backup failed: {e}")
         _active_backup.status = "error"
@@ -961,14 +993,13 @@ async def _run_backup(settings: Settings) -> None:
 async def start_backup(
     request: Request,
     settings: Settings = Depends(get_settings),
+    _: bool = Depends(require_admin_or_api_auth),
 ):
-    """Start a background backup operation."""
-    global _active_backup, _backup_task, _backup_file_path
+    """Start a background backup operation.
 
-    if is_admin_auth_required() and not is_authenticated(request):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    if is_admin_auth_required() and not is_admin(request):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    Supports both session auth (admin user) and API key auth (X-API-Key header).
+    """
+    global _active_backup, _backup_task, _backup_file_path
 
     # Use lock to prevent race conditions when starting backups
     async with _get_backup_lock():
@@ -999,11 +1030,14 @@ async def start_backup(
 
 
 @router.get("/admin/backup/status")
-async def get_backup_status(request: Request):
-    """Get the status of the current backup operation."""
-    if is_admin_auth_required() and not is_authenticated(request):
-        raise HTTPException(status_code=401, detail="Authentication required")
+async def get_backup_status(
+    request: Request,
+    _: bool = Depends(require_admin_or_api_auth),
+):
+    """Get the status of the current backup operation.
 
+    Supports both session auth (admin user) and API key auth (X-API-Key header).
+    """
     if _active_backup is None:
         return {"active": False}
 
@@ -1014,14 +1048,13 @@ async def get_backup_status(request: Request):
 async def download_backup_file(
     request: Request,
     settings: Settings = Depends(get_settings),
+    _: bool = Depends(require_admin_or_api_auth),
 ):
-    """Download a completed backup file."""
-    from fastapi.responses import FileResponse
+    """Download a completed backup file.
 
-    if is_admin_auth_required() and not is_authenticated(request):
-        raise HTTPException(status_code=401, detail="Authentication required")
-    if is_admin_auth_required() and not is_admin(request):
-        raise HTTPException(status_code=403, detail="Admin access required")
+    Supports both session auth (admin user) and API key auth (X-API-Key header).
+    """
+    from fastapi.responses import FileResponse
 
     if _active_backup is None or _active_backup.status != "completed":
         raise HTTPException(status_code=404, detail="No completed backup available")

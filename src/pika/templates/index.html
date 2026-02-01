@@ -7,6 +7,7 @@
 <header class="header">
     <div class="header-left">
         <a href="/" class="logo">PIKA</a>
+        <span class="status-dot" id="status-indicator" title="System status"></span>
     </div>
     <div class="header-right">
         <button class="btn btn-ghost header-link" id="history-toggle" onclick="toggleHistory()">
@@ -162,12 +163,67 @@
         return CURRENT_USER ? `pika_chat_history_${CURRENT_USER}` : 'pika_chat_history';
     }
 
+    // Status indicator polling
+    let statusPollInterval = null;
+
+    async function updateStatusIndicator() {
+        const dot = document.getElementById('status-indicator');
+
+        try {
+            const response = await fetch('/api/v1/status/quick');
+            if (!response.ok) throw new Error('Status check failed');
+
+            const status = await response.json();
+
+            // Remove all status classes
+            dot.classList.remove('status-ready', 'status-indexing', 'status-limited', 'status-offline');
+
+            if (status.status === 'healthy') {
+                if (status.indexing_in_progress) {
+                    dot.classList.add('status-indexing');
+                    dot.title = 'Indexing in background';
+                } else {
+                    dot.classList.add('status-ready');
+                    dot.title = 'Ready';
+                }
+            } else if (status.status === 'degraded') {
+                dot.classList.add('status-limited');
+                dot.title = status.circuit_breaker_open
+                    ? 'Limited · AI recovering'
+                    : 'Limited functionality';
+            } else {
+                dot.classList.add('status-offline');
+                dot.title = 'Offline';
+            }
+        } catch (error) {
+            console.warn('Failed to fetch status:', error);
+            dot.classList.remove('status-ready', 'status-indexing', 'status-limited');
+            dot.classList.add('status-offline');
+            dot.title = 'Offline';
+        }
+    }
+
+    function startStatusPolling() {
+        // Initial check
+        updateStatusIndicator();
+        // Poll every 30 seconds
+        statusPollInterval = setInterval(updateStatusIndicator, 30000);
+    }
+
+    function stopStatusPolling() {
+        if (statusPollInterval) {
+            clearInterval(statusPollInterval);
+            statusPollInterval = null;
+        }
+    }
+
     // Restore chat history on page load
     document.addEventListener('DOMContentLoaded', () => {
         restoreChatHistory();
         updateOnboarding();
         checkActiveQuery();
         loadHistory();
+        startStatusPolling();
     });
 
     function saveChatHistory() {
@@ -533,9 +589,10 @@
         const refreshButton = document.getElementById('onboarding-refresh');
 
         try {
-            const [documentsResponse, statsResponse] = await Promise.all([
+            const [documentsResponse, statsResponse, statusResponse] = await Promise.all([
                 fetch('/documents'),
-                fetch('/api/v1/index/stats')
+                fetch('/api/v1/index/stats'),
+                fetch('/api/v1/status/quick')
             ]);
 
             if (!documentsResponse.ok || !statsResponse.ok) {
@@ -545,6 +602,13 @@
 
             const documents = await documentsResponse.json();
             const stats = await statsResponse.json();
+            const status = statusResponse.ok ? await statusResponse.json() : { indexing_in_progress: false };
+
+            // Hide banner during indexing - the status dot already indicates progress
+            if (status.indexing_in_progress) {
+                banner.classList.add('hidden');
+                return;
+            }
 
             if (!documents.length) {
                 title.textContent = 'Add documents to start chatting';

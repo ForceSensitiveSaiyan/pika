@@ -11,6 +11,18 @@ from pika.config import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 
+class FileTooLargeError(Exception):
+    """Raised when a file exceeds the maximum allowed size."""
+
+    def __init__(self, filename: str, size_mb: float, max_mb: int):
+        self.filename = filename
+        self.size_mb = size_mb
+        self.max_mb = max_mb
+        super().__init__(
+            f"File '{filename}' is {size_mb:.1f}MB, exceeds maximum of {max_mb}MB"
+        )
+
+
 @dataclass
 class DocumentChunk:
     """A chunk of text from a document with metadata."""
@@ -165,8 +177,22 @@ class DocumentProcessor:
         return chunks
 
     def process_document(self, file_path: Path | str) -> list[DocumentChunk]:
-        """Process a document and return chunks with metadata."""
+        """Process a document and return chunks with metadata.
+
+        Raises:
+            FileTooLargeError: If file exceeds max_upload_size_mb setting.
+        """
         file_path = Path(file_path)
+
+        # Check file size before processing (safety net for files not uploaded via API)
+        max_size_bytes = self.settings.max_upload_size_mb * 1024 * 1024
+        file_size = file_path.stat().st_size
+        if file_size > max_size_bytes:
+            size_mb = file_size / (1024 * 1024)
+            raise FileTooLargeError(
+                file_path.name, size_mb, self.settings.max_upload_size_mb
+            )
+
         text = self.extract_text(file_path)
         chunks = self.chunk_text(text)
 

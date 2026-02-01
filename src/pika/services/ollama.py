@@ -36,9 +36,139 @@ class OllamaModelNotFoundError(Exception):
 class OllamaTimeoutError(Exception):
     """Raised when Ollama request times out."""
 
-    def __init__(self, message: str = "Request to Ollama timed out. The model may be overloaded."):
+    def __init__(self, message: str = "The response is taking longer than expected. Try a shorter question or wait a moment."):
         self.message = message
         super().__init__(self.message)
+
+
+class OllamaCircuitOpenError(Exception):
+    """Raised when circuit breaker is open and requests are being rejected."""
+
+    def __init__(self, message: str = "The AI service is recovering. You can still search your documents."):
+        self.message = message
+        super().__init__(self.message)
+
+
+class CircuitState:
+    """Circuit breaker states."""
+    CLOSED = 0  # Normal operation
+    HALF_OPEN = 1  # Testing if service recovered
+    OPEN = 2  # Failing fast, no requests allowed
+
+
+class CircuitBreaker:
+    """Circuit breaker for Ollama connections.
+
+    Prevents cascading failures by failing fast when Ollama is unavailable.
+    States:
+    - CLOSED: Normal operation, requests pass through
+    - OPEN: Requests fail immediately without calling Ollama
+    - HALF_OPEN: Allow one test request to check if Ollama recovered
+    """
+
+    def __init__(self, failure_threshold: int = 5, recovery_timeout: int = 30):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._last_failure_time: float = 0
+        self._lock = asyncio.Lock()
+
+    @property
+    def state(self) -> int:
+        """Get current circuit state."""
+        return self._state
+
+    @property
+    def is_open(self) -> bool:
+        """Check if circuit is open (failing fast)."""
+        return self._state == CircuitState.OPEN
+
+    def _update_metrics(self) -> None:
+        """Update Prometheus metrics for circuit breaker state."""
+        from pika.services.metrics import CIRCUIT_BREAKER_STATE
+        CIRCUIT_BREAKER_STATE.set(self._state)
+
+    async def is_available(self) -> bool:
+        """Check if requests should be allowed through.
+
+        Returns True if circuit is closed or half-open (test allowed).
+        Returns False if circuit is open and recovery timeout hasn't elapsed.
+        """
+        async with self._lock:
+            if self._state == CircuitState.CLOSED:
+                return True
+
+            if self._state == CircuitState.OPEN:
+                # Check if recovery timeout has elapsed
+                import time
+                elapsed = time.time() - self._last_failure_time
+                if elapsed >= self.recovery_timeout:
+                    # Transition to half-open to allow a test request
+                    self._state = CircuitState.HALF_OPEN
+                    self._update_metrics()
+                    logger.info(f"[CircuitBreaker] Transitioning to HALF_OPEN after {elapsed:.1f}s")
+                    return True
+                return False
+
+            # HALF_OPEN - allow the test request
+            return True
+
+    async def record_success(self) -> None:
+        """Record a successful request. Resets failure count and closes circuit."""
+        async with self._lock:
+            if self._state == CircuitState.HALF_OPEN:
+                logger.info("[CircuitBreaker] Test request succeeded, closing circuit")
+            self._failure_count = 0
+            self._state = CircuitState.CLOSED
+            self._update_metrics()
+
+    async def record_failure(self) -> None:
+        """Record a failed request. May open the circuit."""
+        import time
+        from pika.services.metrics import CIRCUIT_BREAKER_TRIPS
+
+        async with self._lock:
+            self._failure_count += 1
+            self._last_failure_time = time.time()
+
+            if self._state == CircuitState.HALF_OPEN:
+                # Test request failed, back to open
+                self._state = CircuitState.OPEN
+                self._update_metrics()
+                logger.warning("[CircuitBreaker] Test request failed, circuit remains OPEN")
+            elif self._failure_count >= self.failure_threshold:
+                # Too many failures, open the circuit
+                self._state = CircuitState.OPEN
+                self._update_metrics()
+                CIRCUIT_BREAKER_TRIPS.inc()
+                logger.warning(
+                    f"[CircuitBreaker] Circuit OPEN after {self._failure_count} consecutive failures"
+                )
+
+    def reset(self) -> None:
+        """Reset circuit breaker to closed state. For testing."""
+        self._state = CircuitState.CLOSED
+        self._failure_count = 0
+        self._last_failure_time = 0
+        self._update_metrics()
+
+
+# Global circuit breaker instance
+_circuit_breaker: CircuitBreaker | None = None
+
+
+def get_circuit_breaker() -> CircuitBreaker:
+    """Get or create the circuit breaker singleton."""
+    global _circuit_breaker
+    if _circuit_breaker is None:
+        from pika.config import get_settings
+        settings = get_settings()
+        _circuit_breaker = CircuitBreaker(
+            failure_threshold=settings.circuit_breaker_failure_threshold,
+            recovery_timeout=settings.circuit_breaker_recovery_timeout,
+        )
+    return _circuit_breaker
 
 
 async def retry_with_backoff(
@@ -187,6 +317,10 @@ __all__ = [
     "OllamaConnectionError",
     "OllamaModelNotFoundError",
     "OllamaTimeoutError",
+    "OllamaCircuitOpenError",
+    "CircuitBreaker",
+    "CircuitState",
+    "get_circuit_breaker",
     "ModelInfo",
     "PullStatus",
     "get_ollama_client",
@@ -351,12 +485,28 @@ class OllamaClient:
         system: str | None = None,
         max_retries: int = 3,
     ) -> str:
-        """Generate a completion from Ollama with retry logic.
+        """Generate a completion from Ollama with retry logic and circuit breaker.
 
         Uses streaming mode internally to work around buffering issues
         in Docker networking on macOS.
+
+        Raises:
+            OllamaCircuitOpenError: If circuit breaker is open
+            OllamaConnectionError: If cannot connect after retries
+            OllamaTimeoutError: If request times out
+            OllamaModelNotFoundError: If model not available
         """
         import time as time_module
+        from pika.config import get_settings
+
+        settings = get_settings()
+
+        # Check circuit breaker if enabled
+        if settings.circuit_breaker_enabled:
+            circuit = get_circuit_breaker()
+            if not await circuit.is_available():
+                logger.warning("[OLLAMA] Circuit breaker is OPEN, rejecting request")
+                raise OllamaCircuitOpenError()
 
         model = model or self.model
         # Use non-streaming mode - streaming has issues with Docker networking on macOS
@@ -432,6 +582,10 @@ class OllamaClient:
             OLLAMA_REQUEST_COUNT.labels(status="success").inc()
             OLLAMA_REQUEST_LATENCY.observe(total_elapsed)
 
+            # Record circuit breaker success
+            if settings.circuit_breaker_enabled:
+                await get_circuit_breaker().record_success()
+
             return result
         except asyncio.CancelledError:
             total_elapsed = time_module.time() - start_time
@@ -442,6 +596,9 @@ class OllamaClient:
             total_elapsed = time_module.time() - start_time
             OLLAMA_REQUEST_COUNT.labels(status="connection_error").inc()
             OLLAMA_REQUEST_LATENCY.observe(total_elapsed)
+            # Record circuit breaker failure
+            if settings.circuit_breaker_enabled:
+                await get_circuit_breaker().record_failure()
             raise
         except Exception as e:
             total_elapsed = time_module.time() - start_time
@@ -449,9 +606,12 @@ class OllamaClient:
                 logger.error(f"[OLLAMA] Timeout after {total_elapsed:.1f}s")
                 OLLAMA_REQUEST_COUNT.labels(status="timeout").inc()
                 OLLAMA_REQUEST_LATENCY.observe(total_elapsed)
+                # Record circuit breaker failure for timeouts
+                if settings.circuit_breaker_enabled:
+                    await get_circuit_breaker().record_failure()
                 raise OllamaTimeoutError(
-                    f"Request timed out after {self.timeout}s. "
-                    "Try a shorter prompt or increase OLLAMA_TIMEOUT."
+                    "The response is taking longer than expected. "
+                    "Try a shorter question or wait a moment."
                 )
             logger.error(f"[OLLAMA] Unexpected failure after {total_elapsed:.1f}s: {type(e).__name__}: {e}")
             OLLAMA_REQUEST_COUNT.labels(status="error").inc()
@@ -465,12 +625,28 @@ class OllamaClient:
         system: str | None = None,
         max_retries: int = 2,
     ) -> AsyncIterator[str]:
-        """Stream a completion from Ollama with retry on connection failure.
+        """Stream a completion from Ollama with retry on connection failure and circuit breaker.
 
         Note: Retries only happen before streaming starts. Once tokens begin
         flowing, the stream cannot be restarted.
+
+        Raises:
+            OllamaCircuitOpenError: If circuit breaker is open
+            OllamaConnectionError: If cannot connect after retries
+            OllamaTimeoutError: If request times out
+            OllamaModelNotFoundError: If model not available
         """
+        from pika.config import get_settings
         from pika.services.metrics import OLLAMA_REQUEST_COUNT
+
+        settings = get_settings()
+
+        # Check circuit breaker if enabled
+        if settings.circuit_breaker_enabled:
+            circuit = get_circuit_breaker()
+            if not await circuit.is_available():
+                logger.warning("[OLLAMA] Circuit breaker is OPEN, rejecting stream request")
+                raise OllamaCircuitOpenError()
 
         model = model or self.model
         payload = {
@@ -502,8 +678,10 @@ class OllamaClient:
                                 if "response" in data:
                                     yield data["response"]
 
-                        # Success - record metric and return
+                        # Success - record metric and circuit breaker success
                         OLLAMA_REQUEST_COUNT.labels(status="success").inc()
+                        if settings.circuit_breaker_enabled:
+                            await get_circuit_breaker().record_success()
                         return
 
             except (httpx.ConnectError, httpx.ConnectTimeout) as e:
@@ -517,13 +695,19 @@ class OllamaClient:
                     await asyncio.sleep(delay)
                 else:
                     OLLAMA_REQUEST_COUNT.labels(status="connection_error").inc()
+                    # Record circuit breaker failure
+                    if settings.circuit_breaker_enabled:
+                        await get_circuit_breaker().record_failure()
                     raise OllamaConnectionError(
-                        f"Failed to connect to Ollama after {max_retries + 1} attempts."
+                        "The AI assistant is not responding. Please check that Ollama is running."
                     )
             except (OllamaModelNotFoundError, OllamaConnectionError):
                 raise
             except httpx.TimeoutException:
                 OLLAMA_REQUEST_COUNT.labels(status="timeout").inc()
+                # Record circuit breaker failure for timeouts
+                if settings.circuit_breaker_enabled:
+                    await get_circuit_breaker().record_failure()
                 raise OllamaTimeoutError()
             except Exception as e:
                 OLLAMA_REQUEST_COUNT.labels(status="error").inc()

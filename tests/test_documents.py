@@ -208,3 +208,65 @@ class TestDocumentInfo:
         assert info.filename == "test.txt"
         assert info.size_bytes == 1024
         assert info.file_type == "txt"
+
+
+class TestFileSizeLimit:
+    """Tests for file size limit enforcement."""
+
+    def test_file_too_large_error_raised(self, temp_dirs):
+        """Verify FileTooLargeError is raised for oversized files."""
+        from pika.services.documents import DocumentProcessor, FileTooLargeError
+        from pika.config import Settings
+
+        # Create processor with 1MB limit
+        settings = Settings(
+            documents_dir=temp_dirs["docs"],
+            max_upload_size_mb=1,
+        )
+        processor = DocumentProcessor(settings=settings)
+
+        # Create a file larger than 1MB
+        docs_dir = Path(temp_dirs["docs"])
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        large_file = docs_dir / "large.txt"
+        large_file.write_bytes(b"x" * (2 * 1024 * 1024))  # 2MB
+
+        with pytest.raises(FileTooLargeError) as exc_info:
+            processor.process_document(large_file)
+
+        assert exc_info.value.filename == "large.txt"
+        assert exc_info.value.max_mb == 1
+        assert exc_info.value.size_mb > 1.9  # ~2MB
+
+    def test_file_within_limit_processed(self, temp_dirs):
+        """Verify files within limit are processed normally."""
+        from pika.services.documents import DocumentProcessor
+        from pika.config import Settings
+
+        settings = Settings(
+            documents_dir=temp_dirs["docs"],
+            max_upload_size_mb=1,
+        )
+        processor = DocumentProcessor(settings=settings)
+
+        # Create a small file
+        docs_dir = Path(temp_dirs["docs"])
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        small_file = docs_dir / "small.txt"
+        small_file.write_text("This is a small test file.")
+
+        # Should process without error
+        chunks = processor.process_document(small_file)
+        assert len(chunks) >= 1
+
+    def test_file_too_large_error_attributes(self):
+        """Verify FileTooLargeError has correct attributes."""
+        from pika.services.documents import FileTooLargeError
+
+        error = FileTooLargeError("test.pdf", 75.5, 50)
+
+        assert error.filename == "test.pdf"
+        assert error.size_mb == 75.5
+        assert error.max_mb == 50
+        assert "75.5MB" in str(error)
+        assert "50MB" in str(error)

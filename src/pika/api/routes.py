@@ -21,6 +21,7 @@ from pika.services.ollama import (
     _format_size,
     cancel_pull_task,
     get_active_pull,
+    get_circuit_breaker,
     get_ollama_client,
     is_pull_running,
     start_pull_task,
@@ -181,6 +182,65 @@ async def health_check(
         ollama=ollama_health,
         index=index_health,
         disk=disk_health,
+    )
+
+
+class QuickStatusResponse(BaseModel):
+    """Lightweight status for UI polling."""
+
+    status: str  # healthy, degraded, unhealthy
+    ollama_connected: bool
+    circuit_breaker_open: bool
+    index_chunks: int
+    indexing_in_progress: bool = False
+
+
+@router.get("/status/quick", response_model=QuickStatusResponse)
+async def quick_status(
+    ollama: OllamaClient = Depends(get_ollama_client),
+    rag: RAGEngine = Depends(get_rag_engine),
+) -> QuickStatusResponse:
+    """Lightweight status check for UI polling.
+
+    This endpoint is optimized for frequent polling (e.g., every 30 seconds)
+    and provides just enough information to update the UI status indicator.
+    """
+    # Check Ollama connectivity
+    ollama_connected = False
+    try:
+        ollama_connected = await ollama.health_check()
+    except Exception:
+        pass
+
+    # Check circuit breaker state
+    circuit_breaker = get_circuit_breaker()
+    circuit_breaker_open = not await circuit_breaker.is_available()
+
+    # Get index chunk count
+    index_chunks = 0
+    try:
+        stats = rag.get_stats()
+        index_chunks = stats.total_chunks
+    except Exception:
+        pass
+
+    # Check if indexing is in progress
+    indexing_in_progress = is_indexing_running()
+
+    # Determine overall status
+    if not ollama_connected:
+        status = "unhealthy"
+    elif circuit_breaker_open:
+        status = "degraded"
+    else:
+        status = "healthy"
+
+    return QuickStatusResponse(
+        status=status,
+        ollama_connected=ollama_connected,
+        circuit_breaker_open=circuit_breaker_open,
+        index_chunks=index_chunks,
+        indexing_in_progress=indexing_in_progress,
     )
 
 

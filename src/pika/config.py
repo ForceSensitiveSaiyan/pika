@@ -61,11 +61,24 @@ class Settings(BaseSettings):
     # Audit settings
     audit_log_path: str = "./data/audit.log"
 
+    # Backup settings
+    backup_retention_count: int = 5  # Number of backups to keep (0 = unlimited)
+
     # Query queue settings
     max_concurrent_queries: int = 1  # Max queries running simultaneously (1 for CPU, 2+ for GPU)
     max_queued_per_user: int = 3  # Max pending queries per user
     queue_timeout: int = 300  # Seconds before queued query times out
     max_queue_size: int = 100  # Maximum total queue length
+
+    # Circuit breaker settings
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_failure_threshold: int = 5  # Failures before opening
+    circuit_breaker_recovery_timeout: int = 30  # Seconds before half-open test
+
+    # Query cache settings
+    query_cache_enabled: bool = True
+    query_cache_ttl: int = 300  # 5 minutes
+    query_cache_max_size: int = 100
 
     # Validators for numeric settings
     @field_validator("max_concurrent_queries", "max_queued_per_user", "max_queue_size")

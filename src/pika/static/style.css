@@ -165,6 +165,32 @@ body {
     gap: var(--space-3);
 }
 
+/* Status Dot */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    cursor: default;
+    transition: var(--transition);
+}
+
+.status-dot.status-ready {
+    background: var(--primary);
+}
+
+.status-dot.status-indexing {
+    background: var(--text-muted);
+}
+
+.status-dot.status-limited {
+    background: var(--warning);
+}
+
+.status-dot.status-offline {
+    background: var(--error);
+}
+
 .header-right {
     display: flex;
     align-items: center;
@@ -805,18 +831,6 @@ body {
     color: #166534;
 }
 
-.status-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: currentColor;
-    animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-}
 
 /* Form Sections */
 .form-section {
@@ -2162,6 +2176,42 @@ body {
 }
 
 .backup-progress-text {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* Indexing Progress */
+.index-progress {
+    display: none;
+    width: 100%;
+    padding: var(--space-4);
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    margin-bottom: var(--space-4);
+}
+
+.index-progress.visible {
+    display: block;
+}
+
+.index-progress-bar {
+    width: 100%;
+    height: 8px;
+    background: var(--bg-tertiary);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: var(--space-2);
+}
+
+.index-progress-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+
+.index-progress-text {
     font-size: 12px;
     color: var(--text-secondary);
 }

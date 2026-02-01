@@ -16,12 +16,18 @@ from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 
 from pika.config import Settings, get_settings
-from pika.services.documents import DocumentProcessor, get_document_processor
+from pika.services.documents import (
+    DocumentProcessor,
+    FileTooLargeError,
+    get_document_processor,
+)
 from pika.services.ollama import (
     OllamaClient,
+    OllamaCircuitOpenError,
     OllamaConnectionError,
     OllamaModelNotFoundError,
     OllamaTimeoutError,
+    get_circuit_breaker,
     get_ollama_client,
 )
 
@@ -43,6 +49,124 @@ class Confidence(str, Enum):
     MEDIUM = "medium"
     LOW = "low"
     NONE = "none"
+    DEGRADED = "degraded"  # Search-only mode when Ollama unavailable
+
+
+def _format_degraded_response(sources: list["Source"]) -> str:
+    """Format a degraded response when Ollama is unavailable.
+
+    Returns a readable answer showing the top source snippets.
+    """
+    if not sources:
+        return (
+            "The AI assistant is temporarily unavailable, and no relevant documents "
+            "were found for your query."
+        )
+
+    lines = [
+        "The AI assistant is temporarily unavailable. "
+        "Here are the most relevant sections from your documents:\n"
+    ]
+
+    for source in sources[:3]:  # Show top 3 sources
+        # Truncate content to first 200 chars
+        content = source.content[:200].strip()
+        if len(source.content) > 200:
+            content += "..."
+        lines.append(f"**{source.filename}**: {content}\n")
+
+    return "\n".join(lines)
+
+
+class QueryCache:
+    """LRU cache for query results with TTL expiration.
+
+    Reduces Ollama load by caching identical queries.
+    """
+
+    def __init__(self, max_size: int = 100, ttl: int = 300):
+        self.max_size = max_size
+        self.ttl = ttl  # Time to live in seconds
+        self._cache: dict[str, tuple[float, "QueryResult"]] = {}
+        self._lock = Lock()
+
+    def _make_key(self, question: str, doc_count: int, chunk_count: int) -> str:
+        """Generate a cache key from query parameters."""
+        import hashlib
+        normalized = question.lower().strip()
+        key_string = f"{normalized}:{doc_count}:{chunk_count}"
+        return hashlib.sha256(key_string.encode()).hexdigest()[:16]
+
+    def get(self, question: str, doc_count: int, chunk_count: int) -> "QueryResult | None":
+        """Get a cached result if it exists and is not expired."""
+        from pika.services.metrics import QUERY_CACHE_HITS, QUERY_CACHE_MISSES
+
+        key = self._make_key(question, doc_count, chunk_count)
+
+        with self._lock:
+            if key not in self._cache:
+                QUERY_CACHE_MISSES.inc()
+                return None
+
+            timestamp, result = self._cache[key]
+            if time.time() - timestamp > self.ttl:
+                # Expired
+                del self._cache[key]
+                QUERY_CACHE_MISSES.inc()
+                return None
+
+            # Move to end (most recently used)
+            del self._cache[key]
+            self._cache[key] = (timestamp, result)
+            QUERY_CACHE_HITS.inc()
+            return result
+
+    def set(self, question: str, doc_count: int, chunk_count: int, result: "QueryResult") -> None:
+        """Cache a query result."""
+        key = self._make_key(question, doc_count, chunk_count)
+
+        with self._lock:
+            # If at max size, remove oldest entry (LRU)
+            if len(self._cache) >= self.max_size and key not in self._cache:
+                oldest_key = next(iter(self._cache))
+                del self._cache[oldest_key]
+
+            self._cache[key] = (time.time(), result)
+
+    def invalidate(self) -> None:
+        """Clear the entire cache. Call on index rebuild."""
+        with self._lock:
+            self._cache.clear()
+            logger.info("[QueryCache] Cache invalidated")
+
+    def size(self) -> int:
+        """Return current cache size."""
+        with self._lock:
+            return len(self._cache)
+
+
+# Global query cache instance
+_query_cache: QueryCache | None = None
+
+
+def get_query_cache() -> QueryCache:
+    """Get or create the query cache singleton."""
+    global _query_cache
+    if _query_cache is None:
+        from pika.config import get_settings
+        settings = get_settings()
+        _query_cache = QueryCache(
+            max_size=settings.query_cache_max_size,
+            ttl=settings.query_cache_ttl,
+        )
+    return _query_cache
+
+
+def invalidate_query_cache() -> None:
+    """Invalidate the query cache. Call on index rebuild."""
+    global _query_cache
+    if _query_cache is not None:
+        _query_cache.invalidate()
 
 
 @dataclass
@@ -962,8 +1086,9 @@ class RAGEngine:
 
     def index_documents(self) -> IndexStats:
         """Index all documents from the documents directory."""
-        # Clear existing index
+        # Clear existing index and invalidate query cache
         self.clear_index()
+        invalidate_query_cache()
 
         # Process all documents
         chunks = self.document_processor.process_all_documents()
@@ -1039,8 +1164,9 @@ class RAGEngine:
         Returns:
             IndexStats with indexing results
         """
-        # Clear existing index
+        # Clear existing index and invalidate query cache
         self.clear_index()
+        invalidate_query_cache()
 
         # Get list of documents using the document processor (consistent with sync version)
         doc_list = self.document_processor.list_documents()
@@ -1060,6 +1186,7 @@ class RAGEngine:
         # Process documents one by one with progress reporting
         all_chunks = []
         source_chunks: dict[str, int] = {}  # Track chunks per source for cache
+        loop = asyncio.get_running_loop()
 
         for i, doc_info in enumerate(doc_list):
             # Report progress before processing
@@ -1070,14 +1197,22 @@ class RAGEngine:
             await asyncio.sleep(0)
 
             try:
-                # Process this document
-                chunks = self.document_processor.process_document(doc_info.path)
+                # Process document in thread pool (CPU-intensive, don't block event loop)
+                chunks = await loop.run_in_executor(
+                    None, self.document_processor.process_document, doc_info.path
+                )
                 all_chunks.extend(chunks)
                 source_chunks[doc_info.filename] = len(chunks)
+            except FileTooLargeError as e:
+                # File exceeds size limit - skip with clear message
+                logger.warning(f"[RAG] Skipping {doc_info.filename}: {e.size_mb:.1f}MB exceeds {e.max_mb}MB limit")
             except Exception as e:
                 # Log warning but continue with other documents
                 logger.warning(f"[RAG] Failed to process {doc_info.filename}: {e}")
-                continue
+
+            # Clean up memory after each document (helps with large files)
+            import gc
+            gc.collect()
 
         # Final progress update
         if progress_callback:
@@ -1106,8 +1241,9 @@ class RAGEngine:
                 "total_chunks": chunk.total_chunks,
             })
 
-        # Generate embeddings (this can be slow)
-        embeddings = self._embed(documents)
+        # Generate embeddings in thread pool (CPU-intensive, don't block event loop)
+        loop = asyncio.get_running_loop()
+        embeddings = await loop.run_in_executor(None, self._embed, documents)
 
         # Add to collection in batches to avoid memory/size issues
         batch_size = 1000
@@ -1319,6 +1455,15 @@ class RAGEngine:
                 confidence=Confidence.NONE,
             )
 
+        # Check query cache if enabled
+        if self.settings.query_cache_enabled:
+            stats = self.get_stats()
+            cached_result = get_query_cache().get(question, stats.total_documents, stats.total_chunks)
+            if cached_result is not None:
+                logger.info("[RAG.query] Cache hit, returning cached result")
+                QUERY_COUNT.labels(status="cache_hit", confidence=cached_result.confidence.value).inc()
+                return cached_result
+
         # Generate embedding for question
         embed_start = time_module.time()
         question_embedding = self._embed([question])[0]
@@ -1401,15 +1546,27 @@ Answer based on the context above:"""
                 ollama_elapsed = time_module.time() - ollama_start
                 total_elapsed = time_module.time() - query_start
                 logger.info(f"[RAG.query] Ollama completed in {ollama_elapsed:.1f}s, total query time: {total_elapsed:.1f}s")
-            except OllamaConnectionError:
-                QUERY_COUNT.labels(status="ollama_connection_error", confidence="none").inc()
+            except OllamaCircuitOpenError:
+                # Degraded mode: return search results without LLM answer
+                logger.info("[RAG.query] Circuit breaker open, returning degraded response")
+                QUERY_COUNT.labels(status="degraded", confidence="degraded").inc()
+                duration = time_module.time() - query_start
+                QUERY_LATENCY.observe(duration)
                 return QueryResult(
-                    answer=(
-                        "Unable to connect to the AI model service (Ollama). "
-                        "Please check that Ollama is running and try again."
-                    ),
+                    answer=_format_degraded_response(sources),
                     sources=sources,
-                    confidence=Confidence.NONE,
+                    confidence=Confidence.DEGRADED,
+                )
+            except OllamaConnectionError:
+                # Degraded mode: return search results without LLM answer
+                logger.info("[RAG.query] Ollama connection error, returning degraded response")
+                QUERY_COUNT.labels(status="degraded", confidence="degraded").inc()
+                duration = time_module.time() - query_start
+                QUERY_LATENCY.observe(duration)
+                return QueryResult(
+                    answer=_format_degraded_response(sources),
+                    sources=sources,
+                    confidence=Confidence.DEGRADED,
                 )
             except OllamaModelNotFoundError as e:
                 QUERY_COUNT.labels(status="ollama_model_not_found", confidence="none").inc()
@@ -1422,14 +1579,15 @@ Answer based on the context above:"""
                     confidence=Confidence.NONE,
                 )
             except OllamaTimeoutError:
-                QUERY_COUNT.labels(status="ollama_timeout", confidence="none").inc()
+                # Degraded mode: return search results without LLM answer
+                logger.info("[RAG.query] Ollama timeout, returning degraded response")
+                QUERY_COUNT.labels(status="degraded", confidence="degraded").inc()
+                duration = time_module.time() - query_start
+                QUERY_LATENCY.observe(duration)
                 return QueryResult(
-                    answer=(
-                        "The request took too long and timed out. "
-                        "Please try a shorter or simpler question, or try again later."
-                    ),
+                    answer=_format_degraded_response(sources),
                     sources=sources,
-                    confidence=Confidence.NONE,
+                    confidence=Confidence.DEGRADED,
                 )
 
         # Record metrics
@@ -1437,11 +1595,18 @@ Answer based on the context above:"""
         QUERY_LATENCY.observe(duration)
         QUERY_COUNT.labels(status="success", confidence=confidence.value).inc()
 
-        return QueryResult(
+        result = QueryResult(
             answer=answer,
             sources=sources,
             confidence=confidence,
         )
+
+        # Cache the result if caching is enabled and it's a successful response
+        if self.settings.query_cache_enabled and confidence != Confidence.NONE:
+            stats = self.get_stats()
+            get_query_cache().set(question, stats.total_documents, stats.total_chunks, result)
+
+        return result
 
     async def query_stream(
         self,
@@ -1607,21 +1772,32 @@ Answer based on the context above:"""
 
             yield {"type": "done", "answer": full_answer}
 
+        except OllamaCircuitOpenError:
+            # Degraded mode: return search results without streaming
+            logger.info("[RAG.query_stream] Circuit breaker open, returning degraded response")
+            degraded_answer = _format_degraded_response(sources)
+            yield {"type": "metadata", "sources": [asdict(s) for s in sources], "confidence": "degraded"}
+            yield {"type": "token", "content": degraded_answer}
+            yield {"type": "done", "answer": degraded_answer}
         except OllamaConnectionError:
-            yield {
-                "type": "error",
-                "message": "Unable to connect to the AI model service. Please check that Ollama is running.",
-            }
+            # Degraded mode: return search results without streaming
+            logger.info("[RAG.query_stream] Ollama connection error, returning degraded response")
+            degraded_answer = _format_degraded_response(sources)
+            yield {"type": "metadata", "sources": [asdict(s) for s in sources], "confidence": "degraded"}
+            yield {"type": "token", "content": degraded_answer}
+            yield {"type": "done", "answer": degraded_answer}
         except OllamaModelNotFoundError as e:
             yield {
                 "type": "error",
                 "message": f"The model '{e.model}' is not available. Please go to Admin to pull or select a model.",
             }
         except OllamaTimeoutError:
-            yield {
-                "type": "error",
-                "message": "The request timed out. Please try a shorter question.",
-            }
+            # Degraded mode: return search results without streaming
+            logger.info("[RAG.query_stream] Ollama timeout, returning degraded response")
+            degraded_answer = _format_degraded_response(sources)
+            yield {"type": "metadata", "sources": [asdict(s) for s in sources], "confidence": "degraded"}
+            yield {"type": "token", "content": degraded_answer}
+            yield {"type": "done", "answer": degraded_answer}
         except Exception as e:
             logger.error(f"[RAG.query_stream] Unexpected error: {e}")
             yield {"type": "error", "message": "An unexpected error occurred"}

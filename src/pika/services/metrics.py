@@ -82,6 +82,28 @@ ACTIVE_SESSIONS = Gauge(
     "Number of active user sessions",
 )
 
+# Circuit breaker metrics
+CIRCUIT_BREAKER_STATE = Gauge(
+    "pika_circuit_breaker_state",
+    "Circuit breaker state: 0=closed, 1=half_open, 2=open",
+)
+
+CIRCUIT_BREAKER_TRIPS = Counter(
+    "pika_circuit_breaker_trips_total",
+    "Total number of times the circuit breaker has tripped open",
+)
+
+# Query cache metrics
+QUERY_CACHE_HITS = Counter(
+    "pika_query_cache_hits_total",
+    "Total query cache hits",
+)
+
+QUERY_CACHE_MISSES = Counter(
+    "pika_query_cache_misses_total",
+    "Total query cache misses",
+)
+
 
 def set_app_info(version: str, model: str) -> None:
     """Set application info metrics."""

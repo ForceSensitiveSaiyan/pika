@@ -417,7 +417,7 @@ class TestOllamaErrors:
 
     @pytest.mark.asyncio
     async def test_connection_error_handled(self, rag_with_docs):
-        """Verify Ollama connection errors are handled gracefully."""
+        """Verify Ollama connection errors trigger degraded mode."""
         from pika.services.ollama import OllamaConnectionError
         from pika.services.rag import RAGEngine, Confidence
 
@@ -437,8 +437,10 @@ class TestOllamaErrors:
 
         result = await engine.query("What is PIKA?")
 
-        assert "Unable to connect" in result.answer
-        assert result.confidence == Confidence.NONE
+        # With graceful degradation, connection errors return degraded mode with sources
+        assert "unavailable" in result.answer.lower()
+        assert result.confidence == Confidence.DEGRADED
+        assert len(result.sources) > 0  # Should include search results
 
     @pytest.mark.asyncio
     async def test_model_not_found_error_handled(self, rag_with_docs):
@@ -469,7 +471,7 @@ class TestOllamaErrors:
 
     @pytest.mark.asyncio
     async def test_timeout_error_handled(self, rag_with_docs):
-        """Verify timeout errors are handled gracefully."""
+        """Verify timeout errors trigger degraded mode."""
         from pika.services.ollama import OllamaTimeoutError
         from pika.services.rag import RAGEngine, Confidence
 
@@ -489,8 +491,10 @@ class TestOllamaErrors:
 
         result = await engine.query("What is PIKA?")
 
-        assert "timed out" in result.answer.lower() or "took too long" in result.answer.lower()
-        assert result.confidence == Confidence.NONE
+        # With graceful degradation, timeout errors return degraded mode with sources
+        assert "unavailable" in result.answer.lower()
+        assert result.confidence == Confidence.DEGRADED
+        assert len(result.sources) > 0  # Should include search results
 
 
 class TestQueryCancellation:

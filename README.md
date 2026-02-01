@@ -95,6 +95,8 @@ start coverage_html\index.html   # Windows
 - Background backup with progress tracking
 - One-click restore from ZIP archive
 - Metadata included (version, timestamp)
+- API support for automated backups (see [Automated Backups](#automated-backups))
+- Configurable retention (default: keep last 5 backups)
 
 ### Security
 - CSRF protection for all forms
@@ -137,6 +139,40 @@ start coverage_html\index.html   # Windows
 | CPU evaluation | `phi3:mini` | 2.2 GB | Fastest on CPU, good for testing |
 | GPU production | `llama3.1:8b` | 4.7 GB | Recommended for production use |
 | GPU high quality | `llama3.1:70b` | 40 GB | Highest quality, requires more VRAM |
+
+## Deployment Notes
+
+### Single-Instance Architecture
+
+PIKA is designed for single-instance deployment (one container/process). This keeps the architecture simple and is appropriate for small teams or personal use.
+
+**Implications:**
+
+- **Sessions**: Stored in-memory; server restarts require users to re-login
+- **Query queue**: Stored in-memory; pending queries are lost on restart (users simply resubmit)
+- **History/Feedback**: Stored in JSON files with thread locking; safe for concurrent requests within a single process
+- **No horizontal scaling**: Running multiple PIKA instances would cause session inconsistencies and potential file conflicts
+
+**For most use cases, this is fine.** PIKA is designed for small teams querying internal documents, not high-traffic public deployments. If you need multi-instance scaling, consider adding Redis for session storage and a shared database for history.
+
+### HTTPS / Reverse Proxy
+
+PIKA does not include built-in HTTPS. For production deployments, use a reverse proxy to handle TLS termination.
+
+**Recommended:** [Caddy](https://caddyserver.com/) provides automatic HTTPS with zero configuration:
+
+```
+# Caddyfile
+pika.yourdomain.com {
+    reverse_proxy localhost:8000
+}
+```
+
+Caddy automatically provisions and renews Let's Encrypt certificates.
+
+**Alternatives:** nginx, Traefik, or any reverse proxy that supports TLS.
+
+**Local/development use:** HTTPS is not required when accessing PIKA on `localhost` or within a trusted private network.
 
 ## Configuration
 
@@ -199,6 +235,12 @@ PIKA is configured via environment variables. Set these in your `docker-compose.
 | `RATE_LIMIT_QUERY` | `10/minute` | Query rate limit per user |
 | `RATE_LIMIT_UPLOAD` | `20/minute` | Upload rate limit per user |
 | `MAX_UPLOAD_SIZE` | `52428800` | Max upload size in bytes (50 MB) |
+
+### Backup Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKUP_RETENTION_COUNT` | `5` | Number of backups to keep (0 = unlimited) |
 
 ## Supported File Types
 
@@ -300,6 +342,42 @@ docker compose logs ollama
 # Follow logs in real-time
 docker compose logs -f
 ```
+
+## Automated Backups
+
+PIKA supports automated backups via API, enabling integration with cron or other schedulers.
+
+### API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/admin/backup/start` | POST | Start a background backup |
+| `/admin/backup/status` | GET | Check backup progress |
+| `/admin/backup/download` | GET | Download completed backup |
+
+All endpoints require authentication via `X-API-Key` header or admin session.
+
+### Cron Example (Linux/Mac)
+
+```bash
+# Daily backup at 2 AM, download to /backups/
+0 2 * * * curl -X POST -H "X-API-Key: your-api-key" http://localhost:8000/admin/backup/start && \
+          sleep 60 && \
+          curl -H "X-API-Key: your-api-key" http://localhost:8000/admin/backup/download -o /backups/pika_$(date +\%Y\%m\%d).zip
+```
+
+### Backup Retention
+
+PIKA automatically deletes old backups based on the `BACKUP_RETENTION_COUNT` setting (default: 5). Set to `0` to keep all backups.
+
+```yaml
+environment:
+  - BACKUP_RETENTION_COUNT=10  # Keep last 10 backups
+```
+
+### Generating an API Key
+
+During initial setup, check "Generate API Key" to create a key for automated access. The key is displayed once—store it securely.
 
 ## Observability
 

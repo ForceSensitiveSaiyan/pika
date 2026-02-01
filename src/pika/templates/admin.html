@@ -7,6 +7,7 @@
 <header class="header">
     <div class="header-left">
         <a href="/" class="logo">PIKA</a>
+        <span class="status-dot" id="status-indicator" title="System status"></span>
         <span class="header-divider">/</span>
         <span class="header-title">Admin</span>
     </div>
@@ -434,6 +435,60 @@
 
     let pullPollingInterval = null;
 
+    // Status indicator polling
+    let statusPollInterval = null;
+
+    async function updateStatusIndicator() {
+        const dot = document.getElementById('status-indicator');
+
+        try {
+            const response = await fetch('/api/v1/status/quick');
+            if (!response.ok) throw new Error('Status check failed');
+
+            const status = await response.json();
+
+            // Remove all status classes
+            dot.classList.remove('status-ready', 'status-indexing', 'status-limited', 'status-offline');
+
+            if (status.status === 'healthy') {
+                if (status.indexing_in_progress) {
+                    dot.classList.add('status-indexing');
+                    dot.title = 'Indexing in background';
+                } else {
+                    dot.classList.add('status-ready');
+                    dot.title = 'Ready';
+                }
+            } else if (status.status === 'degraded') {
+                dot.classList.add('status-limited');
+                dot.title = status.circuit_breaker_open
+                    ? 'Limited · AI recovering'
+                    : 'Limited functionality';
+            } else {
+                dot.classList.add('status-offline');
+                dot.title = 'Offline';
+            }
+        } catch (error) {
+            console.warn('Failed to fetch status:', error);
+            dot.classList.remove('status-ready', 'status-indexing', 'status-limited');
+            dot.classList.add('status-offline');
+            dot.title = 'Offline';
+        }
+    }
+
+    function startStatusPolling() {
+        // Initial check
+        updateStatusIndicator();
+        // Poll every 30 seconds
+        statusPollInterval = setInterval(updateStatusIndicator, 30000);
+    }
+
+    function stopStatusPolling() {
+        if (statusPollInterval) {
+            clearInterval(statusPollInterval);
+            statusPollInterval = null;
+        }
+    }
+
     // Document pagination state
     const DOCS_PER_PAGE = 25;
     let allDocuments = [];
@@ -468,6 +523,7 @@
         checkPostRestore();   // Check if we just restored and need to re-index
         setupUpload();
         checkActivePull();
+        startStatusPolling();  // Start status indicator polling
 
         // Enter key to pull model
         document.getElementById('model-name').addEventListener('keydown', (e) => {
@@ -854,6 +910,7 @@
     }
 
     let indexPollingInterval = null;
+    let indexCompletionHandled = false;
 
     async function refreshIndex() {
         const btn = document.getElementById('refresh-index-btn');
@@ -878,12 +935,14 @@
                 progressText.textContent = 'Starting indexing...';
                 btn.innerHTML = '<span class="spinner"></span> Indexing...';
 
-                // Start polling for progress
+                // Reset completion flag and start polling
+                indexCompletionHandled = false;
                 startIndexPolling();
             } else if (result.status === 'already_running') {
                 // Already running - resume polling
                 progress.classList.add('visible');
                 btn.innerHTML = '<span class="spinner"></span> Indexing...';
+                indexCompletionHandled = false;
                 startIndexPolling();
             } else if (result.status === 'completed') {
                 // Already completed (was running before)
@@ -919,26 +978,35 @@
                     }
                 } else if (status.status === 'completed') {
                     stopIndexPolling();
-                    progressFill.style.width = '100%';
-                    progressText.textContent = 'Indexing complete!';
-                    showToast(`Indexed ${status.total_documents} documents (${status.total_chunks} chunks)`, 'success');
+                    if (!indexCompletionHandled) {
+                        indexCompletionHandled = true;
+                        progressFill.style.width = '100%';
+                        progressText.textContent = 'Indexing complete!';
+                        showToast(`Indexed ${status.total_documents} documents (${status.total_chunks} chunks)`, 'success');
 
-                    setTimeout(() => {
-                        progress.classList.remove('visible');
-                        resetIndexButton();
-                    }, 1500);
+                        setTimeout(() => {
+                            progress.classList.remove('visible');
+                            resetIndexButton();
+                        }, 1500);
 
-                    await loadDocumentsAndStats();
+                        await loadDocumentsAndStats();
+                    }
                 } else if (status.status === 'error') {
                     stopIndexPolling();
-                    showToast(`Indexing failed: ${status.error}`, 'error');
-                    progress.classList.remove('visible');
-                    resetIndexButton();
+                    if (!indexCompletionHandled) {
+                        indexCompletionHandled = true;
+                        showToast(`Indexing failed: ${status.error}`, 'error');
+                        progress.classList.remove('visible');
+                        resetIndexButton();
+                    }
                 } else if (status.status === 'cancelled') {
                     stopIndexPolling();
-                    showToast('Indexing cancelled', 'info');
-                    progress.classList.remove('visible');
-                    resetIndexButton();
+                    if (!indexCompletionHandled) {
+                        indexCompletionHandled = true;
+                        showToast('Indexing cancelled', 'info');
+                        progress.classList.remove('visible');
+                        resetIndexButton();
+                    }
                 } else if (!status.status || status.status === 'none') {
                     // No indexing in progress
                     stopIndexPolling();

@@ -30,11 +30,12 @@ class TestOllamaExceptions:
         assert error.model == "llama3.2:3b"
 
     def test_timeout_error_default_message(self):
-        """Verify OllamaTimeoutError has default message."""
+        """Verify OllamaTimeoutError has user-friendly default message."""
         from pika.services.ollama import OllamaTimeoutError
 
         error = OllamaTimeoutError()
-        assert "timed out" in str(error).lower()
+        # New message is more user-friendly
+        assert "taking longer than expected" in str(error).lower() or "wait" in str(error).lower()
 
 
 class TestPullStatus:
