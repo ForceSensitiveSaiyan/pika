@@ -96,29 +96,32 @@ class TestPasswordVerification:
 
     def test_verify_password_correct(self):
         """Verify correct password is accepted."""
-        from pika.api.web import hash_password, verify_hashed_password
+        from pika.api.web import hash_password
+        from pika.services.auth import AuthService
 
         password = "correct_password"
         hashed = hash_password(password)
 
-        assert verify_hashed_password(password, hashed) is True
+        assert AuthService.verify_password(password, hashed) is True
 
     def test_verify_password_incorrect(self):
         """Verify incorrect password is rejected."""
-        from pika.api.web import hash_password, verify_hashed_password
+        from pika.api.web import hash_password
+        from pika.services.auth import AuthService
 
         password = "correct_password"
         hashed = hash_password(password)
 
-        assert verify_hashed_password("wrong_password", hashed) is False
+        assert AuthService.verify_password("wrong_password", hashed) is False
 
     def test_verify_empty_password(self):
         """Verify empty password is rejected."""
-        from pika.api.web import hash_password, verify_hashed_password
+        from pika.api.web import hash_password
+        from pika.services.auth import AuthService
 
         hashed = hash_password("password")
 
-        assert verify_hashed_password("", hashed) is False
+        assert AuthService.verify_password("", hashed) is False
 
 
 class TestSessionAuthentication:

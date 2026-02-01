@@ -1,7 +1,6 @@
 """Web interface routes for PIKA."""
 
 import asyncio
-import hashlib
 import logging
 import secrets
 import time
@@ -62,22 +61,6 @@ def hash_password(password: str) -> str:
     """Hash a password using bcrypt."""
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(password.encode(), salt).decode()
-
-
-def verify_hashed_password(password: str, hashed: str) -> bool:
-    """Verify a password against a hash. Supports both bcrypt and legacy SHA-256."""
-    # Check if it's a bcrypt hash (starts with $2b$, $2a$, or $2y$)
-    if hashed.startswith(("$2b$", "$2a$", "$2y$")):
-        try:
-            return bcrypt.checkpw(password.encode(), hashed.encode())
-        except Exception:
-            return False
-    else:
-        # Legacy SHA-256 hash (64 hex characters)
-        if len(hashed) == 64:
-            legacy_hash = hashlib.sha256(password.encode()).hexdigest()
-            return secrets.compare_digest(legacy_hash, hashed)
-        return False
 
 
 def _cleanup_expired_sessions() -> int:

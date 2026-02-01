@@ -29,25 +29,26 @@ class TestPasswordHashing:
 
     def test_verify_bcrypt_password(self):
         """Verify bcrypt password verification works."""
-        from pika.api.web import hash_password, verify_hashed_password
+        from pika.api.web import hash_password
+        from pika.services.auth import AuthService
 
         password = "test_password_123"
         hashed = hash_password(password)
 
-        assert verify_hashed_password(password, hashed) is True
-        assert verify_hashed_password("wrong_password", hashed) is False
+        assert AuthService.verify_password(password, hashed) is True
+        assert AuthService.verify_password("wrong_password", hashed) is False
 
     def test_verify_legacy_sha256_password(self):
         """Verify legacy SHA-256 passwords still work."""
         import hashlib
-        from pika.api.web import verify_hashed_password
+        from pika.services.auth import AuthService
 
         password = "legacy_password"
         # Simulate old SHA-256 hash
         legacy_hash = hashlib.sha256(password.encode()).hexdigest()
 
-        assert verify_hashed_password(password, legacy_hash) is True
-        assert verify_hashed_password("wrong_password", legacy_hash) is False
+        assert AuthService.verify_password(password, legacy_hash) is True
+        assert AuthService.verify_password("wrong_password", legacy_hash) is False
 
 
 class TestCSRFProtection:
