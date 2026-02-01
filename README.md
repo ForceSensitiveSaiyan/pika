@@ -206,8 +206,7 @@ PIKA includes a GitHub Actions workflow for automatic deployment to a VPS via SS
    ```
 
 **How it works:**
-- Deploys automatically after CI passes on master
-- Can be triggered manually via GitHub Actions UI
+- Trigger manually via GitHub Actions → Deploy → "Run workflow"
 - Pulls latest code, restarts containers, cleans up old images
 
 ## Configuration

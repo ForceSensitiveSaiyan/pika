@@ -1,21 +1,12 @@
 name: Deploy
 
 on:
-  # Deploy after CI passes on master
-  workflow_run:
-    workflows: ["CI"]
-    types:
-      - completed
-    branches: [master, main]
-
-  # Manual deploy trigger
+  # Manual trigger only
   workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Only deploy if CI succeeded (or manual trigger)
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Deploy to VPS
