@@ -31,9 +31,9 @@ jobs:
             git fetch origin master
             git reset --hard origin/master
 
-            # Rebuild and restart containers
-            docker compose build --pull
-            docker compose up -d
+            # Pull new image and restart (using production compose)
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d
 
             # Clean up old images
             docker image prune -f
