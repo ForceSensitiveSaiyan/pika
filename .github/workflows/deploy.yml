@@ -1,23 +1,31 @@
 name: Deploy
 
 on:
-  # Manual trigger only
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
 
     steps:
-      - name: Deploy to VPS
+      - name: Deploy to ${{ inputs.environment }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || 22 }}
+          port: ${{ secrets.VPS_PORT }}
           script: |
-            cd ${{ secrets.VPS_APP_PATH || '~/pika' }}
+            cd ${{ secrets.VPS_APP_PATH }}
 
             # Pull latest changes
             git fetch origin master
@@ -27,7 +35,7 @@ jobs:
             docker compose pull
             docker compose up -d
 
-            # Optional: clean up old images
+            # Clean up old images
             docker image prune -f
 
-            echo "Deployed at $(date)"
+            echo "Deployed ${{ inputs.environment }} at $(date)"

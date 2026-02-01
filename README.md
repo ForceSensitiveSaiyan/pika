@@ -176,11 +176,11 @@ Caddy automatically provisions and renews Let's Encrypt certificates.
 
 ### Continuous Deployment
 
-PIKA includes a GitHub Actions workflow for automatic deployment to a VPS via SSH.
+PIKA includes a GitHub Actions workflow for SSH deployment to multiple environments.
 
 **Setup:**
 
-1. Generate an SSH key pair for deployments:
+1. Generate an SSH key pair for each environment:
    ```bash
    ssh-keygen -t ed25519 -C "github-deploy" -f deploy_key
    ```
@@ -190,24 +190,31 @@ PIKA includes a GitHub Actions workflow for automatic deployment to a VPS via SS
    cat deploy_key.pub >> ~/.ssh/authorized_keys
    ```
 
-3. Add these secrets to your GitHub repository (Settings → Secrets → Actions):
+3. Create environments in GitHub (Settings → Environments):
+   - Click "New environment"
+   - Create `staging` and `production` (or your preferred names)
+   - Optionally add protection rules (e.g., require approval for production)
+
+4. Add secrets to each environment (not repository-level):
 
    | Secret | Description |
    |--------|-------------|
-   | `VPS_HOST` | Your server IP or hostname |
-   | `VPS_USER` | SSH username (e.g., `deploy`) |
-   | `VPS_SSH_KEY` | Contents of `deploy_key` (private key) |
-   | `VPS_PORT` | SSH port (optional, default: 22) |
-   | `VPS_APP_PATH` | Path to PIKA on server (optional, default: `~/pika`) |
+   | `VPS_HOST` | Server IP or hostname |
+   | `VPS_USER` | SSH username |
+   | `VPS_SSH_KEY` | Private key contents |
+   | `VPS_PORT` | SSH port (e.g., `22`) |
+   | `VPS_APP_PATH` | Path to PIKA (e.g., `~/pika`) |
 
-4. Clone the repo on your VPS:
+5. Clone the repo on each VPS:
    ```bash
-   cd ~ && git clone https://github.com/yourusername/pika.git
+   git clone https://github.com/yourusername/pika.git ~/pika
    ```
 
 **How it works:**
-- Trigger manually via GitHub Actions → Deploy → "Run workflow"
-- Pulls latest code, restarts containers, cleans up old images
+- Go to GitHub Actions → Deploy → "Run workflow"
+- Select target environment from dropdown
+- Each environment uses its own secrets (different servers)
+- Add protection rules for production (optional but recommended)
 
 ## Configuration
 
