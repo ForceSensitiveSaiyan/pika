@@ -178,43 +178,64 @@ Caddy automatically provisions and renews Let's Encrypt certificates.
 
 PIKA includes a GitHub Actions workflow for SSH deployment to multiple environments.
 
-**Setup:**
+**Step 1: Generate SSH key (on your local machine)**
 
-1. Generate an SSH key pair for each environment:
-   ```bash
-   ssh-keygen -t ed25519 -C "github-deploy" -f deploy_key
-   ```
+```bash
+# Generate key pair with NO passphrase (required for automation)
+ssh-keygen -t ed25519 -C "github-deploy" -f pika_deploy_key -N ""
 
-2. Add the public key to your VPS:
-   ```bash
-   cat deploy_key.pub >> ~/.ssh/authorized_keys
-   ```
+# This creates two files:
+# - pika_deploy_key     (private key → goes to GitHub)
+# - pika_deploy_key.pub (public key → goes to VPS)
+```
 
-3. Create environments in GitHub (Settings → Environments):
-   - Click "New environment"
-   - Create `staging` and `production` (or your preferred names)
-   - Optionally add protection rules (e.g., require approval for production)
+**Step 2: Add public key to your VPS**
 
-4. Add secrets to each environment (not repository-level):
+```bash
+# View the public key
+cat pika_deploy_key.pub
 
-   | Secret | Description |
-   |--------|-------------|
-   | `VPS_HOST` | Server IP or hostname |
-   | `VPS_USER` | SSH username |
-   | `VPS_SSH_KEY` | Private key contents |
-   | `VPS_PORT` | SSH port (e.g., `22`) |
-   | `VPS_APP_PATH` | Path to PIKA (e.g., `~/pika`) |
+# SSH into your VPS and add it
+ssh user@your-vps-ip
+echo "ssh-ed25519 AAAA... github-deploy" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
 
-5. Clone the repo on each VPS:
-   ```bash
-   git clone https://github.com/yourusername/pika.git ~/pika
-   ```
+**Step 3: Create GitHub environments**
 
-**How it works:**
-- Go to GitHub Actions → Deploy → "Run workflow"
-- Select target environment from dropdown
-- Each environment uses its own secrets (different servers)
-- Add protection rules for production (optional but recommended)
+1. Go to your repo → **Settings → Environments**
+2. Click **New environment** → name it `production`
+3. (Optional) Enable "Required reviewers" for approval before deploy
+4. Repeat for `staging` if needed
+
+**Step 4: Add secrets to each environment**
+
+In each environment, click **Add secret** for:
+
+   | Secret | Example | Description |
+   |--------|---------|-------------|
+   | `VPS_HOST` | `203.0.113.50` | Server IP or hostname |
+   | `VPS_USER` | `deploy` | SSH username |
+   | `VPS_SSH_KEY` | `-----BEGIN OPENSSH...` | Entire contents of `pika_deploy_key` (private key) |
+   | `VPS_PORT` | `22` | SSH port |
+   | `VPS_APP_PATH` | `~/pika` | Path to PIKA on server |
+
+**Step 5: Clone repo on VPS (first time only)**
+
+```bash
+git clone https://github.com/yourusername/pika.git ~/pika
+cd ~/pika
+docker compose up -d
+```
+
+**Step 6: Deploy**
+
+1. Go to **GitHub → Actions → Deploy**
+2. Click **Run workflow**
+3. Select environment (`production` or `staging`)
+4. Click **Run workflow**
+
+The workflow will SSH into your server, pull latest code, and restart containers.
 
 ## Configuration
 
