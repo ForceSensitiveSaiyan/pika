@@ -174,6 +174,42 @@ Caddy automatically provisions and renews Let's Encrypt certificates.
 
 **Local/development use:** HTTPS is not required when accessing PIKA on `localhost` or within a trusted private network.
 
+### Continuous Deployment
+
+PIKA includes a GitHub Actions workflow for automatic deployment to a VPS via SSH.
+
+**Setup:**
+
+1. Generate an SSH key pair for deployments:
+   ```bash
+   ssh-keygen -t ed25519 -C "github-deploy" -f deploy_key
+   ```
+
+2. Add the public key to your VPS:
+   ```bash
+   cat deploy_key.pub >> ~/.ssh/authorized_keys
+   ```
+
+3. Add these secrets to your GitHub repository (Settings → Secrets → Actions):
+
+   | Secret | Description |
+   |--------|-------------|
+   | `VPS_HOST` | Your server IP or hostname |
+   | `VPS_USER` | SSH username (e.g., `deploy`) |
+   | `VPS_SSH_KEY` | Contents of `deploy_key` (private key) |
+   | `VPS_PORT` | SSH port (optional, default: 22) |
+   | `VPS_APP_PATH` | Path to PIKA on server (optional, default: `~/pika`) |
+
+4. Clone the repo on your VPS:
+   ```bash
+   cd ~ && git clone https://github.com/yourusername/pika.git
+   ```
+
+**How it works:**
+- Deploys automatically after CI passes on master
+- Can be triggered manually via GitHub Actions UI
+- Pulls latest code, restarts containers, cleans up old images
+
 ## Configuration
 
 PIKA is configured via environment variables. Set these in your `docker-compose.yml` or `.env` file:
