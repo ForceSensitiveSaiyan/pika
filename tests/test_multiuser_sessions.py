@@ -4,7 +4,6 @@ These tests verify that users cannot access each other's session data
 and that concurrent session operations are handled safely.
 """
 
-import asyncio
 import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
