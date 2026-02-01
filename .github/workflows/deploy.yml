@@ -31,8 +31,8 @@ jobs:
             git fetch origin master
             git reset --hard origin/master
 
-            # Restart containers
-            docker compose pull
+            # Rebuild and restart containers
+            docker compose build --pull
             docker compose up -d
 
             # Clean up old images
