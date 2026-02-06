@@ -316,7 +316,7 @@ class TestAsyncIndexingAPI:
         with patch("pika.api.web.is_admin_auth_required", return_value=False):
             response = test_client.post("/api/v1/index/start")
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
         assert "index_id" in data
         assert "status" in data
