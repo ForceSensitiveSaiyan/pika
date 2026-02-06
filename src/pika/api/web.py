@@ -11,11 +11,10 @@ from threading import Lock
 
 import bcrypt
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-
 
 # Cache-control headers to prevent browser from caching authenticated pages
 NO_CACHE_HEADERS = {
@@ -27,8 +26,8 @@ NO_CACHE_HEADERS = {
 from pika.config import Settings, get_settings
 from pika.services.app_config import get_app_config
 from pika.services.audit import get_audit_logger
-from pika.services.auth import AuthService, get_auth_service, validate_password_complexity
-from pika.services.documents import DocumentInfo, DocumentProcessor, get_document_processor
+from pika.services.auth import get_auth_service, validate_password_complexity
+from pika.services.documents import DocumentProcessor, get_document_processor
 
 # Rate limiter for auth endpoints
 limiter = Limiter(key_func=get_remote_address)
@@ -859,9 +858,9 @@ def _cleanup_old_backups(backup_dir: Path, keep_count: int) -> None:
 async def _run_backup(settings: Settings) -> None:
     """Run backup in background thread."""
     global _active_backup, _backup_file_path
-    import zipfile
-    import tempfile
     import json
+    import zipfile
+
     from pika import __version__
 
     if _active_backup is None:
@@ -1089,7 +1088,7 @@ async def download_backup(
     settings: Settings = Depends(get_settings),
 ):
     """Download a backup - redirects to the new async flow if no backup ready."""
-    from fastapi.responses import FileResponse, RedirectResponse
+    from fastapi.responses import FileResponse
 
     if is_admin_auth_required() and not is_authenticated(request):
         raise HTTPException(status_code=401, detail="Authentication required")
@@ -1248,7 +1247,6 @@ async def restore_backup(
                 # Fix file permissions - ensure all ChromaDB files are writable
                 # This is necessary because zip extraction can lose write permissions
                 import os
-                import stat
 
                 # First, fix the chroma directory itself
                 chroma_dir.chmod(0o755)
@@ -1273,7 +1271,7 @@ async def restore_backup(
                 # if they contain stale state from the backup source environment
                 journal_extensions = ["-wal", "-shm", "-journal"]
                 journals_deleted = 0
-                for root, dirs, files in os.walk(chroma_dir):
+                for root, _dirs, files in os.walk(chroma_dir):
                     for f in files:
                         if any(f.endswith(ext) for ext in journal_extensions):
                             journal_path = Path(root) / f
@@ -1296,15 +1294,13 @@ async def restore_backup(
 
             # Restore history.json
             if "history.json" in namelist:
-                with zf.open("history.json") as src:
-                    with open(data_dir / "history.json", "wb") as dst:
-                        dst.write(src.read())
+                with zf.open("history.json") as src, open(data_dir / "history.json", "wb") as dst:
+                    dst.write(src.read())
 
             # Restore feedback.json
             if "feedback.json" in namelist:
-                with zf.open("feedback.json") as src:
-                    with open(data_dir / "feedback.json", "wb") as dst:
-                        dst.write(src.read())
+                with zf.open("feedback.json") as src, open(data_dir / "feedback.json", "wb") as dst:
+                    dst.write(src.read())
 
             # Restore user database
             if "pika.db" in namelist:

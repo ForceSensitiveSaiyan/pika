@@ -1,8 +1,6 @@
 """Tests for query cache functionality."""
 
 import time
-import pytest
-from unittest.mock import patch, MagicMock
 
 
 class TestQueryCacheBasic:
@@ -17,7 +15,7 @@ class TestQueryCacheBasic:
 
     def test_cache_set_and_get(self):
         """Verify items can be stored and retrieved."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=100, ttl=300)
 
@@ -45,7 +43,7 @@ class TestQueryCacheBasic:
 
     def test_cache_key_includes_counts(self):
         """Verify cache key depends on document and chunk counts."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=100, ttl=300)
 
@@ -63,7 +61,7 @@ class TestQueryCacheBasic:
 
     def test_cache_normalizes_question(self):
         """Verify cache normalizes question text for key generation."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=100, ttl=300)
 
@@ -82,7 +80,7 @@ class TestQueryCacheTTL:
 
     def test_cache_returns_fresh_entries(self):
         """Verify cache returns entries within TTL."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=100, ttl=300)  # 5 minute TTL
 
@@ -96,7 +94,7 @@ class TestQueryCacheTTL:
 
     def test_cache_expires_old_entries(self):
         """Verify cache expires entries past TTL."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=100, ttl=1)  # 1 second TTL
 
@@ -112,7 +110,7 @@ class TestQueryCacheTTL:
 
     def test_expired_entries_are_removed(self):
         """Verify expired entries are cleaned up on access."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=100, ttl=1)
 
@@ -136,7 +134,7 @@ class TestQueryCacheLRU:
 
     def test_cache_evicts_oldest_when_full(self):
         """Verify oldest entries are evicted when cache is full."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=3, ttl=300)
 
@@ -158,7 +156,7 @@ class TestQueryCacheLRU:
 
     def test_cache_access_updates_lru_order(self):
         """Verify accessing an entry moves it to most recent."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=3, ttl=300)
 
@@ -184,7 +182,7 @@ class TestQueryCacheInvalidation:
 
     def test_invalidate_clears_all_entries(self):
         """Verify invalidate() clears the entire cache."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=100, ttl=300)
 
@@ -209,7 +207,7 @@ class TestQueryCacheInvalidation:
         # Reset the global cache
         rag_module._query_cache = None
 
-        from pika.services.rag import get_query_cache, invalidate_query_cache, QueryResult, Confidence
+        from pika.services.rag import Confidence, QueryResult, get_query_cache, invalidate_query_cache
 
         cache = get_query_cache()
         result = QueryResult(answer="Test", sources=[], confidence=Confidence.HIGH)
@@ -227,8 +225,8 @@ class TestQueryCacheMetrics:
 
     def test_cache_hit_increments_counter(self):
         """Verify cache hit increments the hits counter."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
         from pika.services.metrics import QUERY_CACHE_HITS
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         initial_value = QUERY_CACHE_HITS._value.get()
 
@@ -244,8 +242,8 @@ class TestQueryCacheMetrics:
 
     def test_cache_miss_increments_counter(self):
         """Verify cache miss increments the misses counter."""
-        from pika.services.rag import QueryCache
         from pika.services.metrics import QUERY_CACHE_MISSES
+        from pika.services.rag import QueryCache
 
         initial_value = QUERY_CACHE_MISSES._value.get()
 
@@ -268,7 +266,7 @@ class TestQueryCacheSingleton:
         # Reset singleton
         rag_module._query_cache = None
 
-        from pika.services.rag import get_query_cache, QueryCache
+        from pika.services.rag import QueryCache, get_query_cache
 
         cache = get_query_cache()
         assert isinstance(cache, QueryCache)
@@ -315,8 +313,9 @@ class TestQueryCacheThreadSafety:
 
     def test_concurrent_reads_and_writes(self):
         """Verify cache handles concurrent operations safely."""
-        from pika.services.rag import QueryCache, QueryResult, Confidence
         import threading
+
+        from pika.services.rag import Confidence, QueryCache, QueryResult
 
         cache = QueryCache(max_size=100, ttl=300)
         errors = []

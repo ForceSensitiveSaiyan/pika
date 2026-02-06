@@ -7,22 +7,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from pika.services.rag import (
+    QueryStatus,
     QueuedQuery,
     QueueFullError,
     QueueStats,
-    QueryStatus,
     UserQueueLimitError,
     _active_queries,
     _query_queue,
     _running_queries,
-    _queue_stats,
     get_queue_length,
     get_running_count,
     get_user_queued_count,
-    remove_from_queue,
-    start_query_task,
     init_queue_processor,
+    remove_from_queue,
     shutdown_queue_processor,
+    start_query_task,
 )
 
 

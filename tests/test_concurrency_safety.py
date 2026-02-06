@@ -5,8 +5,6 @@ under concurrent access to prevent race conditions and data corruption.
 """
 
 import asyncio
-import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
@@ -14,12 +12,10 @@ import pytest
 from pika.api.web import (
     _sessions,
     _sessions_lock,
-    _csrf_tokens,
-    _csrf_lock,
     create_session,
     delete_session,
-    get_session,
     generate_csrf_token,
+    get_session,
     validate_csrf_token,
 )
 
@@ -175,10 +171,10 @@ class TestQueryLockSafety:
     def test_concurrent_query_status_updates(self):
         """Concurrent query status updates don't corrupt data."""
         from pika.services.rag import (
-            _set_query_status,
-            get_active_query,
-            clear_query_status,
             QueryStatus,
+            _set_query_status,
+            clear_query_status,
+            get_active_query,
         )
 
         errors = []
@@ -225,8 +221,8 @@ class TestIndexLockSafety:
     def test_concurrent_index_check_consistent(self):
         """Concurrent checks of indexing status are consistent."""
         from pika.services.rag import (
-            is_indexing_running,
             get_active_index,
+            is_indexing_running,
         )
 
         errors = []
@@ -253,9 +249,10 @@ class TestAuditLogLockSafety:
 
     def test_concurrent_audit_writes_no_corruption(self):
         """Concurrent audit log writes don't corrupt the log file."""
-        from pika.services.audit import AuditLogger
         import tempfile
         from pathlib import Path
+
+        from pika.services.audit import AuditLogger
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
             log_path = Path(f.name)
@@ -297,9 +294,10 @@ class TestHistoryLockSafety:
 
     def test_concurrent_history_writes(self):
         """Concurrent history writes don't corrupt data."""
-        from pika.services.history import HistoryService
         import tempfile
         from pathlib import Path
+
+        from pika.services.history import HistoryService
 
         with tempfile.TemporaryDirectory() as tmpdir:
             history = HistoryService(Path(tmpdir))
@@ -361,7 +359,7 @@ class TestCacheThreadSafety:
 
     def test_concurrent_cache_access_no_errors(self):
         """Concurrent cache access doesn't crash."""
-        from pika.services.rag import get_active_query, clear_query_status
+        from pika.services.rag import get_active_query
 
         errors = []
         results = []

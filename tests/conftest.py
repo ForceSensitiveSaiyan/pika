@@ -3,7 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -48,7 +48,7 @@ def mock_ollama_client():
 @pytest.fixture
 def mock_rag_engine():
     """Create a mock RAG engine."""
-    from pika.services.rag import IndexStats, QueryResult, Confidence, Source
+    from pika.services.rag import Confidence, IndexStats, QueryResult, Source
 
     mock = MagicMock()
     mock.get_stats = MagicMock(return_value=IndexStats(
@@ -126,8 +126,8 @@ def reset_singletons():
 @pytest.fixture
 def sample_pdf_file(temp_dirs):
     """Create a sample PDF file for testing."""
+
     from pypdf import PdfWriter
-    from io import BytesIO
 
     docs_dir = Path(temp_dirs["docs"])
     docs_dir.mkdir(parents=True, exist_ok=True)
@@ -137,7 +137,7 @@ def sample_pdf_file(temp_dirs):
 
     writer = PdfWriter()
     # Add a blank page and annotate it with text
-    page = writer.add_blank_page(width=612, height=792)
+    writer.add_blank_page(width=612, height=792)
 
     # Create PDF with embedded text using a simpler approach
     # Write a minimal PDF manually that contains extractable text

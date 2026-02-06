@@ -27,8 +27,8 @@ class TestDegradedMode:
         """Create a RAG engine with indexed documents."""
         from pika.config import Settings
         from pika.services.documents import DocumentProcessor
-        from pika.services.rag import RAGEngine
         from pika.services.ollama import OllamaConnectionError
+        from pika.services.rag import RAGEngine
 
         docs_dir = Path(fresh_temp_dirs["docs"])
         docs_dir.mkdir(parents=True, exist_ok=True)
@@ -121,7 +121,7 @@ class TestDegradedMode:
         """Verify graceful handling when no relevant sources found."""
         from pika.config import Settings
         from pika.services.documents import DocumentProcessor
-        from pika.services.rag import RAGEngine, Confidence
+        from pika.services.rag import Confidence, RAGEngine
 
         # Create empty index
         docs_dir = Path(fresh_temp_dirs["docs"])
@@ -168,8 +168,8 @@ class TestCircuitBreakerIntegration:
     @pytest.mark.asyncio
     async def test_circuit_opens_after_failures(self, fresh_temp_dirs):
         """Verify circuit breaker opens after consecutive failures by recording failures directly."""
-        from pika.services.ollama import get_circuit_breaker, CircuitState, CircuitBreaker
         import pika.services.ollama as ollama_module
+        from pika.services.ollama import CircuitBreaker, CircuitState, get_circuit_breaker
 
         # Reset circuit breaker singleton
         ollama_module._circuit_breaker = None
@@ -196,11 +196,12 @@ class TestStatusEndpoint:
     @pytest.mark.asyncio
     async def test_status_endpoint_returns_healthy(self):
         """Verify status endpoint returns healthy when all systems work."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import pika.services.ollama as ollama_module
         from pika.api.routes import quick_status
         from pika.services.ollama import OllamaClient
-        from pika.services.rag import RAGEngine, IndexStats
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import pika.services.ollama as ollama_module
+        from pika.services.rag import IndexStats, RAGEngine
 
         # Reset circuit breaker
         ollama_module._circuit_breaker = None
@@ -229,11 +230,12 @@ class TestStatusEndpoint:
     @pytest.mark.asyncio
     async def test_status_endpoint_returns_unhealthy_when_ollama_down(self):
         """Verify status endpoint returns unhealthy when Ollama is down."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import pika.services.ollama as ollama_module
         from pika.api.routes import quick_status
         from pika.services.ollama import OllamaClient
-        from pika.services.rag import RAGEngine, IndexStats
-        from unittest.mock import AsyncMock, MagicMock, patch
-        import pika.services.ollama as ollama_module
+        from pika.services.rag import IndexStats, RAGEngine
 
         # Reset circuit breaker
         ollama_module._circuit_breaker = None
@@ -259,11 +261,12 @@ class TestStatusEndpoint:
     @pytest.mark.asyncio
     async def test_status_endpoint_returns_degraded_when_circuit_open(self):
         """Verify status endpoint returns degraded when circuit breaker is open."""
-        from pika.api.routes import quick_status
-        from pika.services.ollama import OllamaClient, get_circuit_breaker, CircuitState
-        from pika.services.rag import RAGEngine, IndexStats
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock
+
         import pika.services.ollama as ollama_module
+        from pika.api.routes import quick_status
+        from pika.services.ollama import CircuitState, OllamaClient, get_circuit_breaker
+        from pika.services.rag import IndexStats, RAGEngine
 
         # Reset and trip circuit breaker
         ollama_module._circuit_breaker = None
@@ -308,10 +311,10 @@ class TestCacheInvalidationOnIndex:
 
     def test_index_documents_invalidates_cache(self, fresh_temp_dirs):
         """Verify index_documents() invalidates the query cache."""
+        import pika.services.rag as rag_module
         from pika.config import Settings
         from pika.services.documents import DocumentProcessor
-        from pika.services.rag import RAGEngine, get_query_cache, QueryResult, Confidence
-        import pika.services.rag as rag_module
+        from pika.services.rag import Confidence, QueryResult, RAGEngine, get_query_cache
 
         # Reset cache singleton
         rag_module._query_cache = None
@@ -363,7 +366,7 @@ class TestConfidenceDegraded:
 
     def test_degraded_response_format(self):
         """Verify degraded response is properly formatted."""
-        from pika.services.rag import _format_degraded_response, Source
+        from pika.services.rag import Source, _format_degraded_response
 
         sources = [
             Source(
@@ -397,7 +400,7 @@ class TestConfidenceDegraded:
 
     def test_degraded_response_truncates_long_content(self):
         """Verify degraded response truncates long source content."""
-        from pika.services.rag import _format_degraded_response, Source
+        from pika.services.rag import Source, _format_degraded_response
 
         long_content = "x" * 500  # 500 characters
 

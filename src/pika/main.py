@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pythonjsonlogger import jsonlogger
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -93,9 +93,9 @@ def _rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 async def lifespan(app: FastAPI):
     """Application lifespan handler with graceful shutdown support."""
     global _shutdown_event
-    from pika.services.rag import init_queue_processor, shutdown_queue_processor, preload_embedding_model
     from pika.api.web import init_session_cleanup, shutdown_session_cleanup
     from pika.services.ollama import close_http_client
+    from pika.services.rag import init_queue_processor, preload_embedding_model, shutdown_queue_processor
 
     _shutdown_event = asyncio.Event()
 

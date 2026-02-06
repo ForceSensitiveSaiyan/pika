@@ -1,8 +1,8 @@
 """Tests for circuit breaker functionality."""
 
 import asyncio
+
 import pytest
-from unittest.mock import patch
 
 
 class TestCircuitBreakerStates:
@@ -62,8 +62,8 @@ class TestCircuitBreakerStates:
     @pytest.mark.asyncio
     async def test_circuit_transitions_to_half_open_after_timeout(self):
         """Verify circuit transitions to HALF_OPEN after recovery timeout."""
+
         from pika.services.ollama import CircuitBreaker, CircuitState
-        import time
 
         circuit = CircuitBreaker(failure_threshold=1, recovery_timeout=1)
 
@@ -168,8 +168,8 @@ class TestCircuitBreakerMetrics:
     @pytest.mark.asyncio
     async def test_circuit_trip_increments_counter(self):
         """Verify circuit trip increments the trips counter."""
-        from pika.services.ollama import CircuitBreaker
         from pika.services.metrics import CIRCUIT_BREAKER_TRIPS
+        from pika.services.ollama import CircuitBreaker
 
         # Get initial value (may be > 0 from other tests)
         initial_value = CIRCUIT_BREAKER_TRIPS._value.get()
@@ -184,8 +184,8 @@ class TestCircuitBreakerMetrics:
     @pytest.mark.asyncio
     async def test_circuit_state_gauge_updates(self):
         """Verify circuit state gauge updates on state change."""
-        from pika.services.ollama import CircuitBreaker, CircuitState
         from pika.services.metrics import CIRCUIT_BREAKER_STATE
+        from pika.services.ollama import CircuitBreaker, CircuitState
 
         circuit = CircuitBreaker(failure_threshold=1, recovery_timeout=0)
 
@@ -213,7 +213,7 @@ class TestCircuitBreakerSingleton:
         # Reset singleton
         ollama_module._circuit_breaker = None
 
-        from pika.services.ollama import get_circuit_breaker, CircuitBreaker
+        from pika.services.ollama import CircuitBreaker, get_circuit_breaker
 
         circuit = get_circuit_breaker()
         assert isinstance(circuit, CircuitBreaker)

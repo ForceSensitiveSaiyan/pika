@@ -1,6 +1,5 @@
 """Tests for document processing service."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -12,8 +11,8 @@ class TestDocumentProcessor:
     @pytest.fixture
     def processor(self, temp_dirs):
         """Create a document processor with temp directory."""
-        from pika.services.documents import DocumentProcessor
         from pika.config import Settings
+        from pika.services.documents import DocumentProcessor
 
         settings = Settings(
             documents_dir=temp_dirs["docs"],
@@ -195,6 +194,7 @@ class TestDocumentInfo:
     def test_document_info_creation(self):
         """Verify DocumentInfo can be created."""
         from datetime import datetime
+
         from pika.services.documents import DocumentInfo
 
         info = DocumentInfo(
@@ -215,8 +215,8 @@ class TestFileSizeLimit:
 
     def test_file_too_large_error_raised(self, temp_dirs):
         """Verify FileTooLargeError is raised for oversized files."""
-        from pika.services.documents import DocumentProcessor, FileTooLargeError
         from pika.config import Settings
+        from pika.services.documents import DocumentProcessor, FileTooLargeError
 
         # Create processor with 1MB limit
         settings = Settings(
@@ -240,8 +240,8 @@ class TestFileSizeLimit:
 
     def test_file_within_limit_processed(self, temp_dirs):
         """Verify files within limit are processed normally."""
-        from pika.services.documents import DocumentProcessor
         from pika.config import Settings
+        from pika.services.documents import DocumentProcessor
 
         settings = Settings(
             documents_dir=temp_dirs["docs"],

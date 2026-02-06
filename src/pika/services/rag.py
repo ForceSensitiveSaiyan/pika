@@ -4,12 +4,12 @@ import asyncio
 import logging
 import time
 from collections import deque
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from threading import Lock
-from typing import AsyncIterator, Callable
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
@@ -22,19 +22,18 @@ from pika.services.documents import (
     get_document_processor,
 )
 from pika.services.ollama import (
-    OllamaClient,
     OllamaCircuitOpenError,
+    OllamaClient,
     OllamaConnectionError,
     OllamaModelNotFoundError,
     OllamaTimeoutError,
-    get_circuit_breaker,
     get_ollama_client,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class Confidence(str, Enum):
+class Confidence(StrEnum):
     """Confidence level for query results."""
 
     HIGH = "high"
@@ -79,7 +78,7 @@ class QueryCache:
     def __init__(self, max_size: int = 100, ttl: int = 300):
         self.max_size = max_size
         self.ttl = ttl  # Time to live in seconds
-        self._cache: dict[str, tuple[float, "QueryResult"]] = {}
+        self._cache: dict[str, tuple[float, QueryResult]] = {}
         self._lock = Lock()
 
     def _make_key(self, question: str, doc_count: int, chunk_count: int) -> str:
@@ -432,9 +431,10 @@ async def _execute_query(queued: QueuedQuery) -> None:
     """Execute a single query from the queue."""
     import time as time_module
 
+    from pika.services.app_config import get_app_config
+
     # Import here to avoid circular import
     from pika.services.audit import get_audit_logger
-    from pika.services.app_config import get_app_config
     from pika.services.history import get_history_service
 
     key = _get_user_key(queued.username)
@@ -499,7 +499,7 @@ async def _execute_query(queued: QueuedQuery) -> None:
         status.mark_completed()
         logger.info(f"[Queue] Query cancelled: {queued.query_id} after {elapsed:.1f}s")
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         elapsed = time_module.time() - query_start
         status.status = "error"
         status.error = f"Query timed out after {get_settings().queue_timeout} seconds"
@@ -787,11 +787,11 @@ async def start_index_task(timeout: int | None = None) -> IndexStatus:
             # Clear partial index on cancellation
             try:
                 rag.clear_index()
-                logger.info(f"[RAG] Cleared partial index after cancellation")
+                logger.info("[RAG] Cleared partial index after cancellation")
             except Exception as e:
                 logger.error(f"[RAG] Failed to clear partial index: {e}")
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             elapsed = time_module.time() - index_start
             index_status.status = "error"
             index_status.error = f"Indexing timed out after {timeout} seconds"
@@ -801,7 +801,7 @@ async def start_index_task(timeout: int | None = None) -> IndexStatus:
             # Clear partial index on timeout
             try:
                 rag.clear_index()
-                logger.info(f"[RAG] Cleared partial index after timeout")
+                logger.info("[RAG] Cleared partial index after timeout")
             except Exception as e:
                 logger.error(f"[RAG] Failed to clear partial index: {e}")
 
@@ -826,7 +826,7 @@ async def start_index_task(timeout: int | None = None) -> IndexStatus:
             # Clear partial index on error
             try:
                 rag.clear_index()
-                logger.info(f"[RAG] Cleared partial index after error")
+                logger.info("[RAG] Cleared partial index after error")
             except Exception as clear_e:
                 logger.error(f"[RAG] Failed to clear partial index: {clear_e}")
 
@@ -991,7 +991,7 @@ class RAGEngine:
             # if they contain stale state from a backup or different environment
             journal_extensions = ["-wal", "-shm", "-journal"]
             journals_deleted = 0
-            for root, dirs, files in os.walk(persist_dir):
+            for root, _dirs, files in os.walk(persist_dir):
                 for f in files:
                     if any(f.endswith(ext) for ext in journal_extensions):
                         journal_path = Path(root) / f
@@ -1430,6 +1430,7 @@ class RAGEngine:
     ) -> QueryResult:
         """Query the RAG system with a question."""
         import time as time_module
+
         from pika.services.metrics import QUERY_COUNT, QUERY_LATENCY
 
         query_start = time_module.time()
@@ -1482,7 +1483,7 @@ class RAGEngine:
 
         # Build sources
         sources = []
-        for i, (doc, metadata, similarity) in enumerate(
+        for _i, (doc, metadata, similarity) in enumerate(
             zip(
                 results["documents"][0],
                 results["metadatas"][0],
@@ -1664,7 +1665,7 @@ Answer based on the context above:"""
 
         # Build sources
         sources = []
-        for i, (doc, metadata, similarity) in enumerate(
+        for _i, (doc, metadata, similarity) in enumerate(
             zip(
                 results["documents"][0],
                 results["metadatas"][0],
@@ -1741,8 +1742,8 @@ Answer based on the context above:"""
 
             # Log to history and audit (same as _execute_query)
             try:
-                from pika.services.audit import get_audit_logger
                 from pika.services.app_config import get_app_config
+                from pika.services.audit import get_audit_logger
                 from pika.services.history import get_history_service
 
                 # Audit log

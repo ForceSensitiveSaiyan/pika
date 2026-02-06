@@ -3,8 +3,6 @@
 import secrets
 import time
 
-import pytest
-
 
 class TestPasswordHashing:
     """Tests for password hashing functionality."""
@@ -41,6 +39,7 @@ class TestPasswordHashing:
     def test_verify_legacy_sha256_password(self):
         """Verify legacy SHA-256 passwords still work."""
         import hashlib
+
         from pika.services.auth import AuthService
 
         password = "legacy_password"
@@ -107,7 +106,7 @@ class TestSessionManagement:
 
     def test_delete_session(self):
         """Verify session deletion works."""
-        from pika.api.web import create_session, get_session, delete_session
+        from pika.api.web import create_session, delete_session, get_session
 
         session_id = create_session({"username": "test_user"})
         assert get_session(session_id) is not None
@@ -118,10 +117,10 @@ class TestSessionManagement:
     def test_session_expiration(self):
         """Verify sessions expire after max age."""
         from pika.api.web import (
+            SESSION_MAX_AGE,
             _sessions,
             _sessions_lock,
             get_session,
-            SESSION_MAX_AGE,
         )
 
         # Create an expired session manually
@@ -142,6 +141,7 @@ class TestZipSlipPrevention:
     def test_safe_extract_path_normal(self):
         """Verify normal paths are allowed."""
         from pathlib import Path
+
         from pika.api.web import _safe_extract_path
 
         base_dir = Path("/tmp/test")
@@ -153,6 +153,7 @@ class TestZipSlipPrevention:
     def test_safe_extract_path_traversal_blocked(self):
         """Verify path traversal attempts are blocked."""
         from pathlib import Path
+
         from pika.api.web import _safe_extract_path
 
         base_dir = Path("/tmp/test")

@@ -4,7 +4,6 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -151,9 +150,9 @@ class TestSessionCleanup:
     def test_cleanup_expired_sessions(self):
         """Test that expired sessions are cleaned up."""
         from pika.api.web import (
-            _sessions,
-            _cleanup_expired_sessions,
             SESSION_MAX_AGE,
+            _cleanup_expired_sessions,
+            _sessions,
         )
 
         # Clear state
@@ -184,9 +183,9 @@ class TestSessionCleanup:
     def test_cleanup_expired_csrf_tokens(self):
         """Test that expired CSRF tokens are cleaned up."""
         from pika.api.web import (
-            _csrf_tokens,
-            _cleanup_expired_csrf_tokens,
             CSRF_TOKEN_MAX_AGE,
+            _cleanup_expired_csrf_tokens,
+            _csrf_tokens,
         )
 
         # Clear state
@@ -255,9 +254,10 @@ class TestFeedbackLimit:
 
     def test_feedback_limit_enforced(self):
         """Test that feedback is capped at max_feedback_items config."""
+        import tempfile
+
         from pika.config import get_settings
         from pika.services.history import HistoryService
-        import tempfile
 
         max_feedback_items = get_settings().max_feedback_items
 
@@ -282,8 +282,9 @@ class TestAuditLogRotation:
 
     def test_rotation_trigger(self):
         """Test that rotation is triggered when log exceeds max size."""
-        from pika.services.audit import AuditLogger
         import tempfile
+
+        from pika.services.audit import AuditLogger
 
         with tempfile.TemporaryDirectory() as tmpdir:
             log_path = Path(tmpdir) / "audit.log"
@@ -291,7 +292,7 @@ class TestAuditLogRotation:
 
             # Write enough data to trigger rotation
             # We need to write 100+ entries to trigger the size check
-            for i in range(150):
+            for _i in range(150):
                 # Force rotation check by setting write count
                 audit._write_count = 99
                 audit.log_query(
@@ -311,7 +312,7 @@ class TestHttpxClientPooling:
     @pytest.mark.asyncio
     async def test_get_shared_client(self):
         """Test that get_http_client returns a shared client."""
-        from pika.services.ollama import get_http_client, close_http_client
+        from pika.services.ollama import close_http_client, get_http_client
 
         client1 = await get_http_client()
         client2 = await get_http_client()
@@ -325,7 +326,7 @@ class TestHttpxClientPooling:
     @pytest.mark.asyncio
     async def test_close_http_client(self):
         """Test that close_http_client properly closes the client."""
-        from pika.services.ollama import get_http_client, close_http_client, _http_client
+        from pika.services.ollama import close_http_client, get_http_client
 
         client = await get_http_client()
         assert not client.is_closed

@@ -5,25 +5,18 @@ isolated between users and that concurrent queries don't interfere.
 """
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
 
 import pytest
 
-from pika.api.web import create_session
 from pika.services.rag import (
+    ANONYMOUS_USER,
     QueryStatus,
-    Confidence,
-    Source,
-    QueryResult,
-    _active_queries,
+    UserQueueLimitError,
     _get_user_key,
     _set_query_status,
-    get_active_query,
-    clear_query_status,
     cancel_query,
-    UserQueueLimitError,
-    ANONYMOUS_USER,
+    clear_query_status,
+    get_active_query,
 )
 
 
@@ -119,7 +112,7 @@ class TestQueryCancellationIsolation:
         _set_query_status(status2, "user2")
 
         # user1 cancels their query
-        result = await cancel_query("user1")
+        await cancel_query("user1")
 
         # user1's query should be cancelled (status cleared or changed)
         # Note: cancel_query behavior depends on implementation
@@ -213,9 +206,10 @@ class TestQueryHistoryIsolation:
 
     def test_history_service_per_user(self):
         """History service returns only the requesting user's history."""
-        from pika.services.history import HistoryService
         import tempfile
         from pathlib import Path
+
+        from pika.services.history import HistoryService
 
         # Create a temp directory for history
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -253,9 +247,10 @@ class TestQueryHistoryIsolation:
 
     def test_clear_history_only_affects_own_user(self):
         """Clearing history only affects the calling user."""
-        from pika.services.history import HistoryService
         import tempfile
         from pathlib import Path
+
+        from pika.services.history import HistoryService
 
         with tempfile.TemporaryDirectory() as tmpdir:
             history = HistoryService(Path(tmpdir))

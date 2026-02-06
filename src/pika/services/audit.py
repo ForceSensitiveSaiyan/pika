@@ -125,7 +125,7 @@ class AuditLogger:
             return 0
 
         try:
-            with open(self.log_path, "r", encoding="utf-8") as f:
+            with open(self.log_path, encoding="utf-8") as f:
                 return sum(1 for line in f if line.strip())
         except Exception as e:
             logger.error(f"Failed to count audit log entries: {e}")
@@ -147,7 +147,7 @@ class AuditLogger:
             return []
 
         try:
-            with open(self.log_path, "r", encoding="utf-8") as f:
+            with open(self.log_path, encoding="utf-8") as f:
                 lines = f.readlines()
 
             # Parse all valid entries (most recent first)

@@ -4,9 +4,9 @@ import asyncio
 import json
 import logging
 import threading
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import AsyncIterator
 
 import httpx
 
@@ -127,6 +127,7 @@ class CircuitBreaker:
     async def record_failure(self) -> None:
         """Record a failed request. May open the circuit."""
         import time
+
         from pika.services.metrics import CIRCUIT_BREAKER_TRIPS
 
         async with self._lock:
@@ -192,13 +193,10 @@ async def retry_with_backoff(
         max_delay: Maximum delay between retries
         retryable_exceptions: Tuple of exceptions that trigger a retry
     """
-    last_exception = None
-
     for attempt in range(max_retries + 1):
         try:
             return await func()
         except retryable_exceptions as e:
-            last_exception = e
             if attempt < max_retries:
                 delay = min(base_delay * (2 ** attempt), max_delay)
                 logger.warning(
@@ -456,24 +454,23 @@ class OllamaClient:
         _set_active_pull(pull_status)
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}/api/pull",
-                    json=payload,
-                ) as response:
-                    response.raise_for_status()
-                    async for line in response.aiter_lines():
-                        if line:
-                            data = json.loads(line)
-                            # Update pull status
-                            if "status" in data:
-                                pull_status.status = data["status"]
-                            if "completed" in data:
-                                pull_status.completed = data["completed"]
-                            if "total" in data:
-                                pull_status.total = data["total"]
-                            yield data
+            async with httpx.AsyncClient(timeout=timeout) as client, client.stream(
+                "POST",
+                f"{self.base_url}/api/pull",
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if line:
+                        data = json.loads(line)
+                        # Update pull status
+                        if "status" in data:
+                            pull_status.status = data["status"]
+                        if "completed" in data:
+                            pull_status.completed = data["completed"]
+                        if "total" in data:
+                            pull_status.total = data["total"]
+                        yield data
         except Exception as e:
             pull_status.error = str(e)
             pull_status.status = "error"
@@ -502,6 +499,7 @@ class OllamaClient:
             OllamaModelNotFoundError: If model not available
         """
         import time as time_module
+
         from pika.config import get_settings
 
         settings = get_settings()
@@ -523,7 +521,6 @@ class OllamaClient:
         if system:
             payload["system"] = system
 
-        timeout = _make_timeout(self.timeout)
         prompt_len = len(prompt)
         system_len = len(system) if system else 0
         start_time = time_module.time()
@@ -662,7 +659,6 @@ class OllamaClient:
         if system:
             payload["system"] = system
 
-        last_error = None
         for attempt in range(max_retries + 1):
             try:
                 async with httpx.AsyncClient(timeout=_make_timeout(self.timeout)) as client:
@@ -690,7 +686,6 @@ class OllamaClient:
                         return
 
             except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-                last_error = e
                 if attempt < max_retries:
                     delay = min(1.0 * (2 ** attempt), 5.0)
                     logger.warning(

@@ -1,6 +1,6 @@
 """Prometheus metrics for PIKA observability."""
 
-from prometheus_client import Counter, Histogram, Gauge, Info
+from prometheus_client import Counter, Gauge, Histogram, Info
 
 # Application info
 APP_INFO = Info("pika", "PIKA application information")

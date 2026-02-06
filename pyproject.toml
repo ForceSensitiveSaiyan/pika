@@ -68,4 +68,14 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
-ignore = ["E501"]
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "B008",   # Depends() in defaults is standard FastAPI pattern
+    "B904",   # raise-from in except clauses (too noisy for existing code)
+    "B905",   # zip() without strict= (not needed for same-length iterables)
+    "E402",   # Module-level import not at top (FastAPI router pattern)
+    "SIM102", # Nested ifs (sometimes clearer than combined)
+    "SIM103", # Return negated condition (stylistic)
+    "SIM105", # contextlib.suppress (stylistic)
+    "SIM117", # Combine with statements (stylistic)
+]

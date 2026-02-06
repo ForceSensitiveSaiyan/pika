@@ -9,17 +9,14 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
-import pytest
-
 from pika.api.web import (
+    SESSION_MAX_AGE,
+    _cleanup_expired_sessions,
     _sessions,
     _sessions_lock,
     create_session,
     delete_session,
     get_session,
-    is_authenticated,
-    _cleanup_expired_sessions,
-    SESSION_MAX_AGE,
 )
 
 

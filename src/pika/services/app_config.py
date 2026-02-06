@@ -24,7 +24,7 @@ class AppConfigService:
         """Load configuration from disk."""
         if self.config_path.exists():
             try:
-                with open(self.config_path, "r") as f:
+                with open(self.config_path) as f:
                     self._config = json.load(f)
                 logger.info(f"Loaded config from {self.config_path}")
             except Exception as e:

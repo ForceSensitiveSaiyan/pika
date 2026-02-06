@@ -1,7 +1,8 @@
 """Tests for Ollama service functionality."""
 
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 
 class TestOllamaExceptions:
@@ -131,7 +132,7 @@ class TestPullTaskManagement:
     def test_set_active_pull(self):
         """Verify active pull can be set and retrieved."""
         import pika.services.ollama as ollama_module
-        from pika.services.ollama import PullStatus, get_active_pull, _set_active_pull
+        from pika.services.ollama import PullStatus, _set_active_pull, get_active_pull
 
         # Reset state
         ollama_module._active_pull = None
@@ -208,7 +209,6 @@ class TestOllamaClient:
     def test_client_model_property(self):
         """Verify model property returns current model."""
         from pika.services.ollama import OllamaClient
-        from unittest.mock import patch
 
         client = OllamaClient()
 
@@ -239,8 +239,9 @@ class TestRetryWithBackoff:
     @pytest.mark.asyncio
     async def test_retry_succeeds_after_failures(self):
         """Verify function retries and eventually succeeds."""
-        from pika.services.ollama import retry_with_backoff
         import httpx
+
+        from pika.services.ollama import retry_with_backoff
 
         call_count = 0
 
@@ -262,8 +263,9 @@ class TestRetryWithBackoff:
     @pytest.mark.asyncio
     async def test_retry_raises_after_max_retries(self):
         """Verify function raises OllamaConnectionError after max retries."""
-        from pika.services.ollama import retry_with_backoff, OllamaConnectionError
         import httpx
+
+        from pika.services.ollama import OllamaConnectionError, retry_with_backoff
 
         call_count = 0
 

@@ -3,7 +3,7 @@
 import shutil
 import tempfile
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -345,7 +345,7 @@ class TestQueryStatus:
 
     def test_query_status_to_dict(self):
         """Verify QueryStatus converts to dict correctly."""
-        from pika.services.rag import QueryStatus, QueryResult, Source, Confidence
+        from pika.services.rag import Confidence, QueryResult, QueryStatus, Source
 
         result = QueryResult(
             answer="PIKA is a RAG system.",
@@ -394,7 +394,6 @@ class TestOllamaErrors:
         """Create a RAG engine with documents for error testing."""
         from pika.config import Settings
         from pika.services.documents import DocumentProcessor
-        from pika.services.rag import RAGEngine
 
         docs_dir = Path(fresh_temp_dirs["docs"])
         docs_dir.mkdir(parents=True, exist_ok=True)
@@ -419,7 +418,7 @@ class TestOllamaErrors:
     async def test_connection_error_handled(self, rag_with_docs):
         """Verify Ollama connection errors trigger degraded mode."""
         from pika.services.ollama import OllamaConnectionError
-        from pika.services.rag import RAGEngine, Confidence
+        from pika.services.rag import Confidence, RAGEngine
 
         settings, doc_processor = rag_with_docs
 
@@ -446,7 +445,7 @@ class TestOllamaErrors:
     async def test_model_not_found_error_handled(self, rag_with_docs):
         """Verify model not found errors are handled gracefully."""
         from pika.services.ollama import OllamaModelNotFoundError
-        from pika.services.rag import RAGEngine, Confidence
+        from pika.services.rag import Confidence, RAGEngine
 
         settings, doc_processor = rag_with_docs
 
@@ -473,7 +472,7 @@ class TestOllamaErrors:
     async def test_timeout_error_handled(self, rag_with_docs):
         """Verify timeout errors trigger degraded mode."""
         from pika.services.ollama import OllamaTimeoutError
-        from pika.services.rag import RAGEngine, Confidence
+        from pika.services.rag import Confidence, RAGEngine
 
         settings, doc_processor = rag_with_docs
 
@@ -502,10 +501,9 @@ class TestQueryCancellation:
 
     def test_is_query_running_false_initially(self):
         """Verify no query is running initially."""
-        from pika.services.rag import is_query_running
-
         # Reset state
         import pika.services.rag as rag_module
+        from pika.services.rag import is_query_running
         rag_module._query_task = None
 
         assert is_query_running() is False
@@ -513,10 +511,9 @@ class TestQueryCancellation:
     @pytest.mark.asyncio
     async def test_cancel_query_when_none_running(self):
         """Verify cancelling when no query running returns False."""
-        from pika.services.rag import cancel_query
-
         # Reset state
         import pika.services.rag as rag_module
+        from pika.services.rag import cancel_query
         rag_module._query_task = None
 
         result = await cancel_query()
@@ -525,10 +522,10 @@ class TestQueryCancellation:
     def test_clear_query_status(self):
         """Verify query status can be cleared."""
         from pika.services.rag import (
-            get_active_query,
-            clear_query_status,
-            _set_query_status,
             QueryStatus,
+            _set_query_status,
+            clear_query_status,
+            get_active_query,
         )
 
         # Set a query status
@@ -617,20 +614,18 @@ class TestAsyncIndexing:
 
     def test_is_indexing_running_false_initially(self):
         """Verify no indexing is running initially."""
-        from pika.services.rag import is_indexing_running
-
         # Reset state
         import pika.services.rag as rag_module
+        from pika.services.rag import is_indexing_running
         rag_module._index_task = None
 
         assert is_indexing_running() is False
 
     def test_cancel_index_when_not_running(self):
         """Verify cancelling when no indexing running returns False."""
-        from pika.services.rag import cancel_index_task
-
         # Reset state
         import pika.services.rag as rag_module
+        from pika.services.rag import cancel_index_task
         rag_module._index_task = None
 
         result = cancel_index_task()
@@ -638,7 +633,7 @@ class TestAsyncIndexing:
 
     def test_get_active_index_none_initially(self):
         """Verify get_active_index returns None initially."""
-        from pika.services.rag import get_active_index, _set_active_index
+        from pika.services.rag import _set_active_index, get_active_index
 
         # Reset state
         _set_active_index(None)
@@ -648,9 +643,9 @@ class TestAsyncIndexing:
     def test_set_and_get_active_index(self):
         """Verify setting and getting active index works."""
         from pika.services.rag import (
-            get_active_index,
-            _set_active_index,
             IndexStatus,
+            _set_active_index,
+            get_active_index,
         )
 
         # Reset state first
@@ -676,7 +671,8 @@ class TestCaching:
     def test_cache_invalidation(self, temp_dirs):
         """Verify cache is invalidated after clear_index."""
         import os
-        from pika.services.rag import RAGEngine, IndexStats
+
+        from pika.services.rag import IndexStats, RAGEngine
 
         settings = MagicMock()
         settings.chroma_persist_dir = os.path.join(temp_dirs["data"], "chroma")
@@ -702,7 +698,8 @@ class TestCaching:
     def test_update_cache(self, temp_dirs):
         """Verify _update_cache correctly sets cache values."""
         import os
-        from pika.services.rag import RAGEngine, IndexStats, IndexedDocument
+
+        from pika.services.rag import IndexedDocument, IndexStats, RAGEngine
 
         settings = MagicMock()
         settings.chroma_persist_dir = os.path.join(temp_dirs["data"], "chroma")

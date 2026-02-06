@@ -1,7 +1,6 @@
 """Tests for API endpoints."""
 
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 class TestMetricsEndpoint:
@@ -57,21 +56,21 @@ class TestMetricsModule:
 
     def test_set_app_info(self):
         """Verify app info can be set."""
-        from pika.services.metrics import set_app_info, APP_INFO
+        from pika.services.metrics import set_app_info
 
         set_app_info("1.0.0", "test-model")
         # No exception means success
 
     def test_update_index_metrics(self):
         """Verify index metrics can be updated."""
-        from pika.services.metrics import update_index_metrics, INDEX_DOCUMENTS, INDEX_CHUNKS
+        from pika.services.metrics import update_index_metrics
 
         update_index_metrics(10, 100)
         # Gauges should be set (we can't easily read the value in tests)
 
     def test_update_queue_metrics(self):
         """Verify queue metrics can be updated."""
-        from pika.services.metrics import update_queue_metrics, ACTIVE_QUERIES, QUEUED_QUERIES
+        from pika.services.metrics import update_queue_metrics
 
         update_queue_metrics(2, 5)
         # Gauges should be set
@@ -83,8 +82,8 @@ class TestHealthEndpoint:
     def test_health_returns_200(self, test_client, mock_ollama_client, mock_rag_engine):
         """Verify health endpoint returns 200."""
         from pika.main import app
-        from pika.services.rag import get_rag_engine
         from pika.services.ollama import get_ollama_client
+        from pika.services.rag import get_rag_engine
 
         # Use FastAPI's dependency override mechanism
         app.dependency_overrides[get_ollama_client] = lambda: mock_ollama_client
@@ -104,8 +103,8 @@ class TestHealthEndpoint:
     def test_health_shows_ollama_disconnected(self, test_client, mock_ollama_client, mock_rag_engine):
         """Verify health endpoint shows Ollama disconnection."""
         from pika.main import app
-        from pika.services.rag import get_rag_engine
         from pika.services.ollama import get_ollama_client
+        from pika.services.rag import get_rag_engine
 
         mock_ollama_client.health_check = AsyncMock(return_value=False)
         mock_ollama_client.list_models = AsyncMock(return_value=[])
@@ -388,9 +387,10 @@ class TestAsyncIndexingAPI:
 
     def test_sync_index_blocked_when_async_running(self, test_client):
         """Verify sync index returns 409 when async indexing is running."""
-        from pika.services.rag import IndexStatus, _set_active_index
-        import pika.services.rag as rag_module
         import asyncio
+
+        import pika.services.rag as rag_module
+        from pika.services.rag import IndexStatus, _set_active_index
 
         # Create a mock task that is not done
         async def dummy():

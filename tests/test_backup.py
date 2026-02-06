@@ -3,7 +3,6 @@
 import io
 import json
 import zipfile
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -188,8 +187,9 @@ class TestBackupRetention:
 
     def test_cleanup_old_backups_removes_excess(self, tmp_path):
         """Verify old backups are deleted when exceeding retention count."""
-        from pika.api.web import _cleanup_old_backups
         import time
+
+        from pika.api.web import _cleanup_old_backups
 
         backup_dir = tmp_path / "backups"
         backup_dir.mkdir()

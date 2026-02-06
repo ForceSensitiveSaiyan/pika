@@ -5,7 +5,6 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any
 
 from pika.config import get_settings
 
@@ -32,7 +31,7 @@ class HistoryService:
         # Load history
         if self.history_path.exists():
             try:
-                with open(self.history_path, "r") as f:
+                with open(self.history_path) as f:
                     self._history = json.load(f)
                 logger.info(f"Loaded {len(self._history)} history items")
             except Exception as e:
@@ -42,7 +41,7 @@ class HistoryService:
         # Load feedback
         if self.feedback_path.exists():
             try:
-                with open(self.feedback_path, "r") as f:
+                with open(self.feedback_path) as f:
                     self._feedback = json.load(f)
                 logger.info(f"Loaded {len(self._feedback)} feedback items")
             except Exception as e:

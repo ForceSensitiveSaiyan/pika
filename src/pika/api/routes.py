@@ -4,17 +4,17 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from pika.api.web import get_current_user, require_admin_auth, require_admin_or_api_auth, require_user_auth
-from pika.services.auth import AuthService, get_auth_service, validate_password_complexity
+from pika.api.web import get_current_user, require_admin_auth, require_admin_or_api_auth
 from pika.config import get_settings
 from pika.services.app_config import AppConfigService, get_app_config
 from pika.services.audit import get_audit_logger
+from pika.services.auth import AuthService, get_auth_service, validate_password_complexity
 from pika.services.history import HistoryService, get_history_service
 from pika.services.ollama import (
     OllamaClient,
@@ -36,12 +36,8 @@ from pika.services.rag import (
     clear_query_status,
     get_active_index,
     get_active_query,
-    get_queue_length,
     get_rag_engine,
-    get_running_count,
     is_indexing_running,
-    is_query_running,
-    remove_from_queue,
     start_index_task,
     start_query_task,
 )
