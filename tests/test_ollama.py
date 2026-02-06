@@ -240,7 +240,6 @@ class TestRetryWithBackoff:
     async def test_retry_succeeds_after_failures(self):
         """Verify function retries and eventually succeeds."""
         import httpx
-
         from pika.services.ollama import retry_with_backoff
 
         call_count = 0
@@ -264,7 +263,6 @@ class TestRetryWithBackoff:
     async def test_retry_raises_after_max_retries(self):
         """Verify function raises OllamaConnectionError after max retries."""
         import httpx
-
         from pika.services.ollama import OllamaConnectionError, retry_with_backoff
 
         call_count = 0

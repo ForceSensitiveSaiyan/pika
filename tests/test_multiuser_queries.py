@@ -7,7 +7,6 @@ isolated between users and that concurrent queries don't interfere.
 import asyncio
 
 import pytest
-
 from pika.services.rag import (
     ANONYMOUS_USER,
     QueryStatus,

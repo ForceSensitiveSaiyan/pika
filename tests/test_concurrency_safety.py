@@ -8,7 +8,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pytest
-
 from pika.api.web import (
     _sessions,
     _sessions_lock,

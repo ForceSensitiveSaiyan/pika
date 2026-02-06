@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-
 from pika.config import Settings
 
 

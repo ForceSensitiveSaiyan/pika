@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-
 from pika.main import app
 
 
