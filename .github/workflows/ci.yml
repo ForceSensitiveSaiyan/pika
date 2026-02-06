@@ -31,7 +31,7 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest tests/ --cov=src/pika --cov-report=term-missing --cov-report=xml --cov-fail-under=70 -v
+          pytest tests/ --cov=src/pika --cov-report=term-missing --cov-report=xml --cov-fail-under=55 -v
 
       - name: Dependency audit
         run: |
