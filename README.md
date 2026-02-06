@@ -19,22 +19,37 @@ cd pika
 
 The setup script will:
 - Start the Docker containers
-- Pull the default LLM model (mistral:7b)
+- Pull the default LLM model (llama3.2:3b)
 - Open PIKA in your browser
 
 ### Using Docker Compose
 
 ```bash
-# Start the services
+# Start the services (in development, docker-compose.override.yml is auto-loaded)
 docker compose up -d
 
 # Pull the LLM model (first time only)
-docker compose exec ollama ollama pull mistral:7b
+docker compose exec ollama ollama pull llama3.2:3b
 
 # Open http://localhost:8000 in your browser
 ```
 
 ## Development
+
+### Docker Compose Setup
+
+PIKA uses a standard Docker Compose override pattern:
+
+- **`docker-compose.yml`** — production-ready base config (GHCR image, `DEBUG=false`, GPU config)
+- **`docker-compose.override.yml`** — dev overrides, auto-loaded by Docker Compose (local build, `DEBUG=true`)
+
+```bash
+# Development (auto-loads override — builds locally with debug on)
+docker compose up -d
+
+# Production (explicit file — skips override, pulls from GHCR)
+docker compose -f docker-compose.yml up -d
+```
 
 ### Running Tests
 
@@ -85,7 +100,7 @@ start coverage_html\index.html   # Windows
 
 ### Query Queue System
 - FIFO queue for fair query processing in multi-user environments
-- Configurable concurrency (1 for CPU, 2+ for GPU)
+- Configurable concurrency (default: 1, increase based on GPU VRAM)
 - Per-user queue limits to prevent one user blocking others
 - Queue position and estimated wait time display
 - Automatic timeout for stale queries
@@ -123,14 +138,29 @@ start coverage_html\index.html   # Windows
 
 ## Hardware Requirements
 
-| Component | Minimum (Evaluation) | Recommended (Production) |
-|-----------|----------------------|--------------------------|
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
 | RAM | 8 GB | 16 GB+ |
 | Storage | 10 GB | 20 GB+ |
 | CPU | 4 cores | 8+ cores |
-| GPU | Not required | **NVIDIA GPU (required)** |
+| GPU | NVIDIA or AMD (required) | NVIDIA RTX 3060+ or AMD RX 6000+ |
 
-> **Important:** CPU-only mode is suitable for evaluation and testing only. For production use with acceptable response times, an NVIDIA GPU is required. Without a GPU, queries may take 30+ seconds to complete.
+> **Important:** A GPU is required. CPU-only inference is too slow for production use and is not supported.
+
+### GPU Setup
+
+PIKA requires a GPU for LLM inference via Ollama. NVIDIA is configured by default; AMD is available as a commented alternative in `docker-compose.yml`.
+
+**NVIDIA:**
+
+1. Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+2. Verify with: `docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi`
+3. No changes needed in `docker-compose.yml` — NVIDIA is active by default
+
+**AMD (ROCm):**
+
+1. Install [ROCm drivers](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/)
+2. In `docker-compose.yml`, swap the Ollama image and device config (see comments in the file)
 
 ### Model Recommendations
 
@@ -227,8 +257,8 @@ git clone https://github.com/yourusername/pika.git ~/pika
 cd ~/pika
 
 # Use production compose (pulls pre-built image from GitHub Container Registry)
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml pull
+docker compose -f docker-compose.yml up -d
 ```
 
 **Step 6: Deploy**
@@ -248,8 +278,8 @@ To add another server (e.g., `staging`, `eu-west`):
    ```bash
    git clone https://github.com/yourusername/pika.git ~/pika
    cd ~/pika
-   docker compose -f docker-compose.prod.yml pull
-   docker compose -f docker-compose.prod.yml up -d
+   docker compose -f docker-compose.yml pull
+   docker compose -f docker-compose.yml up -d
    ```
 
 2. **In GitHub** - create environment and add secrets:
@@ -384,7 +414,7 @@ This usually means the LLM is taking too long to respond. Try:
 If you see "model not found" errors, pull the model first:
 
 ```bash
-docker compose exec ollama ollama pull mistral:7b
+docker compose exec ollama ollama pull llama3.2:3b
 ```
 
 ### Out of memory errors
@@ -392,7 +422,7 @@ docker compose exec ollama ollama pull mistral:7b
 LLMs require significant RAM. If you're running out of memory:
 
 1. Close other applications
-2. Use a smaller model (e.g., `phi3:mini` instead of `mistral:7b`)
+2. Use a smaller model (e.g., `phi3:mini` instead of `llama3.2:3b`)
 3. Increase your system's swap space
 
 ### Documents not appearing after upload
