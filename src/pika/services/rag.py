@@ -985,7 +985,7 @@ class RAGEngine:
         logger.info(f"[RAG] Fixing permissions in {persist_dir}")
         try:
             # Fix the directory itself
-            persist_dir.chmod(0o777)
+            persist_dir.chmod(0o755)
 
             # Delete SQLite journal files first - these can cause "readonly database" errors
             # if they contain stale state from a backup or different environment
@@ -1008,12 +1008,12 @@ class RAGEngine:
             for root, dirs, files in os.walk(persist_dir):
                 for d in dirs:
                     try:
-                        (Path(root) / d).chmod(0o777)
+                        (Path(root) / d).chmod(0o755)
                     except Exception as e:
                         logger.debug(f"[RAG] Could not fix permissions on dir {d}: {e}")
                 for f in files:
                     try:
-                        (Path(root) / f).chmod(0o666)
+                        (Path(root) / f).chmod(0o644)
                     except Exception as e:
                         logger.debug(f"[RAG] Could not fix permissions on file {f}: {e}")
 
@@ -1047,7 +1047,7 @@ class RAGEngine:
 
         # Ensure directory exists with correct permissions
         persist_dir.mkdir(parents=True, exist_ok=True)
-        persist_dir.chmod(0o777)
+        persist_dir.chmod(0o755)
 
         # Create fresh ChromaDB client
         import chromadb
@@ -1801,13 +1801,16 @@ Answer based on the context above:"""
 
 # Singleton instance
 _rag_engine: RAGEngine | None = None
+_rag_engine_lock = Lock()
 
 
 def get_rag_engine() -> RAGEngine:
     """Get or create the RAG engine singleton."""
     global _rag_engine
     if _rag_engine is None:
-        _rag_engine = RAGEngine()
+        with _rag_engine_lock:
+            if _rag_engine is None:
+                _rag_engine = RAGEngine()
     return _rag_engine
 
 

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import AsyncIterator
@@ -156,18 +157,21 @@ class CircuitBreaker:
 
 # Global circuit breaker instance
 _circuit_breaker: CircuitBreaker | None = None
+_circuit_breaker_lock = threading.Lock()
 
 
 def get_circuit_breaker() -> CircuitBreaker:
     """Get or create the circuit breaker singleton."""
     global _circuit_breaker
     if _circuit_breaker is None:
-        from pika.config import get_settings
-        settings = get_settings()
-        _circuit_breaker = CircuitBreaker(
-            failure_threshold=settings.circuit_breaker_failure_threshold,
-            recovery_timeout=settings.circuit_breaker_recovery_timeout,
-        )
+        with _circuit_breaker_lock:
+            if _circuit_breaker is None:
+                from pika.config import get_settings
+                settings = get_settings()
+                _circuit_breaker = CircuitBreaker(
+                    failure_threshold=settings.circuit_breaker_failure_threshold,
+                    recovery_timeout=settings.circuit_breaker_recovery_timeout,
+                )
     return _circuit_breaker
 
 

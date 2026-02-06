@@ -168,11 +168,14 @@ class HistoryService:
 
 # Singleton instance
 _history_service: HistoryService | None = None
+_history_service_lock = Lock()
 
 
 def get_history_service() -> HistoryService:
     """Get the history service singleton."""
     global _history_service
     if _history_service is None:
-        _history_service = HistoryService()
+        with _history_service_lock:
+            if _history_service is None:
+                _history_service = HistoryService()
     return _history_service

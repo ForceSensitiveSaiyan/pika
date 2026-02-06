@@ -29,6 +29,14 @@ documents/
 dist/
 build/
 
+# Tests and CI
+tests/
+.github/
+scripts/
+
+# Documentation
+*.md
+
 # Misc
 .DS_Store
 *.log

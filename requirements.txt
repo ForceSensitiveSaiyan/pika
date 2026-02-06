@@ -1,28 +1,29 @@
 # Core
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-jinja2>=3.1.0
-python-multipart>=0.0.6
+fastapi~=0.109.0
+uvicorn[standard]~=0.27.0
+pydantic~=2.5.0
+pydantic-settings~=2.1.0
+jinja2~=3.1.0
+python-multipart~=0.0.6
 
 # HTTP client
-httpx>=0.26.0
-aiohttp>=3.9.0
-requests>=2.31.0
+httpx~=0.26.0
+aiohttp~=3.9.0
+requests~=2.31.0
 
 # Document processing
-pypdf>=4.0.0
-python-docx>=1.1.0
+pypdf~=4.0.0
+python-docx~=1.1.0
 
 # RAG dependencies
+numpy<2.0
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
 
 # Security
-bcrypt>=4.1.0
-slowapi>=0.1.9
+bcrypt~=4.1.0
+slowapi~=0.1.9
 
 # Observability
-prometheus-client>=0.20.0
-python-json-logger>=2.0.0
+prometheus-client~=0.20.0
+python-json-logger~=2.0.0

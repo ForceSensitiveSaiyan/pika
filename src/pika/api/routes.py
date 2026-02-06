@@ -4,14 +4,14 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from pika.api.web import get_current_user, require_admin_auth, require_admin_or_api_auth, require_user_auth
-from pika.services.auth import AuthService, get_auth_service
+from pika.services.auth import AuthService, get_auth_service, validate_password_complexity
 from pika.config import get_settings
 from pika.services.app_config import AppConfigService, get_app_config
 from pika.services.audit import get_audit_logger
@@ -57,9 +57,9 @@ limiter = Limiter(key_func=get_remote_address)
 class GenerateRequest(BaseModel):
     """Request model for text generation."""
 
-    prompt: str
+    prompt: str = Field(min_length=1, max_length=10000)
     model: str | None = None
-    system: str | None = None
+    system: str | None = Field(default=None, max_length=5000)
     stream: bool = False
 
 
@@ -211,8 +211,8 @@ async def quick_status(
     ollama_connected = False
     try:
         ollama_connected = await ollama.health_check()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Ollama health check failed: %s", e)
 
     # Check circuit breaker state
     circuit_breaker = get_circuit_breaker()
@@ -223,8 +223,8 @@ async def quick_status(
     try:
         stats = rag.get_stats()
         index_chunks = stats.total_chunks
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to get index stats for quick status: %s", e)
 
     # Check if indexing is in progress
     indexing_in_progress = is_indexing_running()
@@ -301,7 +301,8 @@ async def list_models(
             for m in models
         ]
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Ollama unavailable: {e}")
+        logger.error("Failed to list models: %s", e)
+        raise HTTPException(status_code=503, detail="Ollama unavailable")
 
 
 @router.get("/models/current", response_model=CurrentModelResponse)
@@ -342,7 +343,7 @@ class PullModelResponse(BaseModel):
     message: str
 
 
-@router.post("/models/pull", response_model=PullModelResponse)
+@router.post("/models/pull", response_model=PullModelResponse, status_code=202)
 async def pull_model(
     request: PullModelRequest,
     ollama: OllamaClient = Depends(get_ollama_client),
@@ -351,9 +352,12 @@ async def pull_model(
     """Pull a new model from Ollama registry."""
     if is_pull_running():
         pull = get_active_pull()
-        return PullModelResponse(
-            started=False,
-            message=f"Already pulling {pull.model if pull else 'a model'}",
+        return JSONResponse(
+            status_code=200,
+            content=PullModelResponse(
+                started=False,
+                message=f"Already pulling {pull.model if pull else 'a model'}",
+            ).model_dump(),
         )
 
     # Audit log
@@ -456,7 +460,8 @@ async def generate(
             model=request.model or ollama.model,
         )
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Generation failed: {e}")
+        logger.error("Generation failed: %s", e)
+        raise HTTPException(status_code=503, detail="Generation failed")
 
 
 # --- RAG Endpoints ---
@@ -488,7 +493,7 @@ class IndexedDocumentResponse(BaseModel):
 class QueryRequest(BaseModel):
     """Request model for RAG queries."""
 
-    question: str
+    question: str = Field(min_length=1, max_length=10000)
     top_k: int | None = None
 
     @field_validator("top_k")
@@ -552,8 +557,8 @@ async def index_documents(
             total_chunks=stats.total_chunks,
         )
     except Exception as e:
-        logger.exception(f"Indexing failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Indexing failed: {e}")
+        logger.error("Indexing failed: %s", e)
+        raise HTTPException(status_code=500, detail="Indexing failed")
 
 
 # --- Async Indexing Endpoints ---
@@ -594,7 +599,7 @@ class CancelIndexResponse(BaseModel):
     message: str
 
 
-@router.post("/index/start", response_model=StartIndexResponse)
+@router.post("/index/start", response_model=StartIndexResponse, status_code=202)
 async def start_indexing(
     request: StartIndexRequest | None = None,
     _: bool = Depends(require_admin_or_api_auth),
@@ -602,10 +607,13 @@ async def start_indexing(
     """Start async background indexing with progress reporting."""
     if is_indexing_running():
         index = get_active_index()
-        return StartIndexResponse(
-            index_id=index.index_id if index else "",
-            status="already_running",
-            message="Indexing is already in progress",
+        return JSONResponse(
+            status_code=200,
+            content=StartIndexResponse(
+                index_id=index.index_id if index else "",
+                status="already_running",
+                message="Indexing is already in progress",
+            ).model_dump(),
         )
 
     # Start the indexing task
@@ -688,7 +696,8 @@ async def get_index_stats(
             collection_name=stats.collection_name,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {e}")
+        logger.error("Failed to get index stats: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to get stats")
 
 
 class IndexInfoResponse(BaseModel):
@@ -722,15 +731,8 @@ async def get_index_info(
             ],
         )
     except Exception as e:
-        logger.exception(f"Failed to get index info: {e}")
-        # Return empty stats on error rather than 500
-        # This can happen after restore when ChromaDB needs recovery
-        return IndexInfoResponse(
-            total_documents=0,
-            total_chunks=0,
-            collection_name="pika_documents",
-            documents=[],
-        )
+        logger.error("Failed to get index info: %s", e)
+        raise HTTPException(status_code=503, detail="Index temporarily unavailable")
 
 
 @router.get("/documents", response_model=list[IndexedDocumentResponse])
@@ -749,7 +751,8 @@ async def get_indexed_documents(
             for doc in documents
         ]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get documents: {e}")
+        logger.error("Failed to get documents: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to get documents")
 
 
 class QueryStartResponse(BaseModel):
@@ -811,8 +814,8 @@ async def query_documents(
     except UserQueueLimitError as e:
         raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
-        logger.exception(f"Failed to start query: {query.question[:50]}...")
-        raise HTTPException(status_code=500, detail=f"Failed to start query: {e}")
+        logger.error("Failed to start query: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to start query")
 
 
 @router.get("/query/status", response_model=QueryStatusResponse)
@@ -1104,9 +1107,10 @@ async def create_user(
     if request.role not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="Role must be 'admin' or 'user'")
 
-    # Validate password length
-    if len(request.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    # Validate password complexity
+    password_error = validate_password_complexity(request.password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
 
     # Validate username
     if len(request.username) < 3:
@@ -1136,9 +1140,10 @@ async def update_user_password(
     _: bool = Depends(require_admin_auth),
 ) -> dict:
     """Update a user's password (admin only)."""
-    # Validate password length
-    if len(request.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    # Validate password complexity
+    password_error = validate_password_complexity(request.password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
 
     # Check user exists
     user = auth.get_user_by_id(user_id)

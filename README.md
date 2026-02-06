@@ -119,6 +119,14 @@ start coverage_html\index.html   # Windows
 - Secure session management (in-memory; server restart requires re-login)
 - Audit logging for admin actions
 - Path traversal prevention
+- Security headers on all responses (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy)
+- Password complexity requirements (min 8 chars, uppercase, lowercase, digit)
+
+### Docker Security
+- Container runs as non-root `pika` user
+- Volume mounts owned by the application user
+- Configurable image versioning via `PIKA_VERSION` environment variable
+- Log rotation configured (10MB max, 3 files)
 
 ### Feedback System
 - Thumbs up/down feedback on query responses
@@ -268,7 +276,7 @@ docker compose -f docker-compose.yml up -d
 3. Select environment (`production` or `staging`)
 4. Click **Run workflow**
 
-The workflow pulls the latest image from GHCR and restarts containers.
+The workflow pulls the latest image from GHCR, restarts containers, and performs a health check loop (up to 150 seconds). If the health check fails, it automatically rolls back to the previous deployment.
 
 **Adding a New Environment (additional VPS)**
 
@@ -299,6 +307,21 @@ To add another server (e.g., `staging`, `eu-west`):
 4. **Deploy** - select the new environment from the dropdown
 
 All environments pull the same pre-built image from GHCR, so deploys are fast and consistent.
+
+### Image Versioning
+
+By default, `docker-compose.yml` uses the `latest` tag. To pin to a specific version, set the `PIKA_VERSION` environment variable:
+
+```bash
+# Pin to a specific commit SHA
+PIKA_VERSION=abc1234 docker compose -f docker-compose.yml up -d
+
+# Or export it
+export PIKA_VERSION=abc1234
+docker compose -f docker-compose.yml up -d
+```
+
+This is recommended for production to ensure reproducible deployments.
 
 ## Configuration
 

@@ -127,11 +127,14 @@ class AppConfigService:
 
 # Singleton instance
 _app_config: AppConfigService | None = None
+_app_config_lock = Lock()
 
 
 def get_app_config() -> AppConfigService:
     """Get the app config singleton."""
     global _app_config
     if _app_config is None:
-        _app_config = AppConfigService()
+        with _app_config_lock:
+            if _app_config is None:
+                _app_config = AppConfigService()
     return _app_config

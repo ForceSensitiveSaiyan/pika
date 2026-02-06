@@ -49,6 +49,12 @@ services:
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # -- AMD GPU: uncomment the lines below and comment out the NVIDIA GPU section
     # devices:
     #   - /dev/kfd
@@ -71,7 +77,7 @@ services:
           #    top-level "devices" (see above) instead of deploy reservations
 
   pika:
-    image: ghcr.io/forcesensitivesaiyan/pika:latest
+    image: ghcr.io/forcesensitivesaiyan/pika:${PIKA_VERSION:-latest}
     container_name: pika-app
     ports:
       - "8000:8000"
@@ -96,6 +102,12 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         limits:

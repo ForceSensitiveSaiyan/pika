@@ -25,15 +25,40 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT }}
           script: |
-            cd ${{ secrets.VPS_APP_PATH }}
+            cd "${{ secrets.VPS_APP_PATH }}"
 
-            # Pull latest changes
+            # Save current image for rollback
+            CURRENT_IMAGE=$(docker compose -f docker-compose.yml images -q pika 2>/dev/null || true)
+
+            # Pull latest changes (safe checkout, no hard reset)
             git fetch origin master
-            git reset --hard origin/master
+            git checkout origin/master
 
             # Pull new image and restart (using production compose)
             docker compose -f docker-compose.yml pull
             docker compose -f docker-compose.yml up -d
+
+            # Health check loop (30 attempts x 5s = 150s max)
+            echo "Waiting for health check..."
+            HEALTHY=false
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8000/api/v1/health > /dev/null 2>&1; then
+                HEALTHY=true
+                echo "Health check passed on attempt $i"
+                break
+              fi
+              echo "Attempt $i/30 - waiting 5s..."
+              sleep 5
+            done
+
+            if [ "$HEALTHY" = false ]; then
+              echo "ERROR: Health check failed after 30 attempts, rolling back..."
+              if [ -n "$CURRENT_IMAGE" ]; then
+                docker compose -f docker-compose.yml down
+                docker compose -f docker-compose.yml up -d
+              fi
+              exit 1
+            fi
 
             # Clean up old images
             docker image prune -f

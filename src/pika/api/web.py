@@ -27,7 +27,7 @@ NO_CACHE_HEADERS = {
 from pika.config import Settings, get_settings
 from pika.services.app_config import get_app_config
 from pika.services.audit import get_audit_logger
-from pika.services.auth import AuthService, get_auth_service
+from pika.services.auth import AuthService, get_auth_service, validate_password_complexity
 from pika.services.documents import DocumentInfo, DocumentProcessor, get_document_processor
 
 # Rate limiter for auth endpoints
@@ -45,7 +45,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _sessions: dict[str, dict] = {}
 _sessions_lock = Lock()
 SESSION_MAX_AGE = 86400  # 24 hours in seconds
-SESSION_CLEANUP_INTERVAL = 300  # Run cleanup every 5 minutes
+SESSION_CLEANUP_INTERVAL = get_settings().session_cleanup_interval
 
 # CSRF token storage (maps token -> session_id for validation)
 _csrf_tokens: dict[str, tuple[str, float]] = {}  # token -> (session_id, created_at)
@@ -504,12 +504,13 @@ async def setup_submit(
             status_code=400,
         )
 
-    # Validate password length
-    if len(password) < 6:
+    # Validate password complexity
+    password_error = validate_password_complexity(password)
+    if password_error:
         new_csrf = generate_csrf_token()
         return templates.TemplateResponse(
             "setup.html",
-            {"request": request, "error": "Password must be at least 6 characters", "username": username, "csrf_token": new_csrf},
+            {"request": request, "error": password_error, "username": username, "csrf_token": new_csrf},
             status_code=400,
         )
 
@@ -625,7 +626,7 @@ async def upload_document(
         raise HTTPException(status_code=400, detail=f"Invalid filename: {e}")
 
     # Validate file extension
-    allowed_extensions = {".pdf", ".docx", ".txt", ".md"}
+    allowed_extensions = {ext.strip() for ext in settings.allowed_extensions.split(",")}
     file_ext = Path(filename).suffix.lower()
 
     if file_ext not in allowed_extensions:
@@ -1250,7 +1251,7 @@ async def restore_backup(
                 import stat
 
                 # First, fix the chroma directory itself
-                chroma_dir.chmod(0o777)
+                chroma_dir.chmod(0o755)
                 logger.info(f"[Restore] Set chroma_dir permissions: {chroma_dir}")
 
                 # Then fix all subdirectories and files
@@ -1259,11 +1260,11 @@ async def restore_backup(
                 for root, dirs, files in os.walk(chroma_dir):
                     for d in dirs:
                         dir_path = Path(root) / d
-                        dir_path.chmod(0o777)  # Full permissions for directories
+                        dir_path.chmod(0o755)  # rwxr-xr-x for directories
                         dirs_fixed += 1
                     for f in files:
                         file_path = Path(root) / f
-                        file_path.chmod(0o666)  # Read/write for files
+                        file_path.chmod(0o644)  # rw-r--r-- for files
                         files_fixed += 1
 
                 logger.info(f"[Restore] ChromaDB restored to {chroma_dir}: {files_fixed} files, {dirs_fixed} dirs (permissions fixed)")

@@ -171,11 +171,14 @@ class AuditLogger:
 
 # Singleton instance
 _audit_logger: AuditLogger | None = None
+_audit_logger_lock = Lock()
 
 
 def get_audit_logger() -> AuditLogger:
     """Get the audit logger singleton."""
     global _audit_logger
     if _audit_logger is None:
-        _audit_logger = AuditLogger()
+        with _audit_logger_lock:
+            if _audit_logger is None:
+                _audit_logger = AuditLogger()
     return _audit_logger

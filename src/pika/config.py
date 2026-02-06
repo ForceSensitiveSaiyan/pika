@@ -58,6 +58,12 @@ class Settings(BaseSettings):
         if not self.pika_session_secret:
             object.__setattr__(self, "pika_session_secret", _generate_secret())
 
+    # Document settings
+    allowed_extensions: str = ".pdf,.docx,.txt,.md"  # Comma-separated allowed upload extensions
+
+    # Session cleanup
+    session_cleanup_interval: int = 300  # Seconds between session cleanup runs
+
     # Audit settings
     audit_log_path: str = "./data/audit.log"
 

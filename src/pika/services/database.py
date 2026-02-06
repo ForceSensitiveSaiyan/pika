@@ -212,11 +212,14 @@ class DatabaseService:
 
 # Singleton instance
 _database: DatabaseService | None = None
+_database_lock = Lock()
 
 
 def get_database() -> DatabaseService:
     """Get the database singleton."""
     global _database
     if _database is None:
-        _database = DatabaseService()
+        with _database_lock:
+            if _database is None:
+                _database = DatabaseService()
     return _database

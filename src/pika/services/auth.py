@@ -3,6 +3,7 @@
 import logging
 import os
 import secrets
+import threading
 
 import bcrypt
 
@@ -10,6 +11,23 @@ from pika.services.app_config import get_app_config
 from pika.services.database import DatabaseService, get_database
 
 logger = logging.getLogger(__name__)
+
+
+def validate_password_complexity(password: str) -> str | None:
+    """Validate password meets complexity requirements.
+
+    Returns None if valid, or an error message string if invalid.
+    Requirements: min 8 chars, at least one uppercase, one lowercase, one digit.
+    """
+    if len(password) < 8:
+        return "Password must be at least 8 characters"
+    if not any(c.isupper() for c in password):
+        return "Password must contain at least one uppercase letter"
+    if not any(c.islower() for c in password):
+        return "Password must contain at least one lowercase letter"
+    if not any(c.isdigit() for c in password):
+        return "Password must contain at least one digit"
+    return None
 
 
 class AuthService:
@@ -257,11 +275,14 @@ class AuthService:
 
 # Singleton instance
 _auth_service: AuthService | None = None
+_auth_service_lock = threading.Lock()
 
 
 def get_auth_service() -> AuthService:
     """Get the auth service singleton."""
     global _auth_service
     if _auth_service is None:
-        _auth_service = AuthService()
+        with _auth_service_lock:
+            if _auth_service is None:
+                _auth_service = AuthService()
     return _auth_service
