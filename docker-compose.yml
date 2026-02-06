@@ -1,5 +1,18 @@
 # PIKA Docker Compose Configuration
 #
+# GPU Configuration:
+# ------------------
+# A GPU is required for acceptable LLM inference performance.
+# Uncomment the section matching your GPU vendor below.
+#
+# NVIDIA: Requires NVIDIA Container Toolkit
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+#   Verify: docker run --rm --gpus all nvidia/cuda:12.6.3-base-ubuntu24.04 nvidia-smi
+#
+# AMD: Requires ROCm-compatible GPU (RX 6000/7000, MI series)
+#   https://rocm.docs.amd.com/projects/install-on-linux/en/latest/
+#   Uses ollama/ollama:rocm image instead of ollama/ollama:latest
+#
 # Resource Limits:
 # ----------------
 # Adjust these based on your hardware:
@@ -17,7 +30,10 @@
 
 services:
   ollama:
+    # -- NVIDIA GPU: use the default image
     image: ollama/ollama:latest
+    # -- AMD GPU: uncomment the line below and comment out the NVIDIA image above
+    # image: ollama/ollama:rocm
     container_name: pika-ollama
     ports:
       - "11434:11434"
@@ -33,6 +49,10 @@ services:
       retries: 5
       start_period: 60s
     restart: unless-stopped
+    # -- AMD GPU: uncomment the lines below and comment out the NVIDIA GPU section
+    # devices:
+    #   - /dev/kfd
+    #   - /dev/dri
     deploy:
       resources:
         limits:
@@ -42,11 +62,16 @@ services:
         reservations:
           # Guaranteed memory - helps prevent OOM kills
           memory: 4G
+          # -- NVIDIA GPU
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+          # -- AMD GPU: remove the NVIDIA devices block above; AMD uses
+          #    top-level "devices" (see above) instead of deploy reservations
 
   pika:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/forcesensitivesaiyan/pika:latest
     container_name: pika-app
     ports:
       - "8000:8000"
@@ -54,7 +79,7 @@ services:
       - ./documents:/app/documents
       - pika_data:/app/data
     environment:
-      - DEBUG=true  # Set to false if using HTTPS
+      - DEBUG=false
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=llama3.2:3b
       - OLLAMA_TIMEOUT=300

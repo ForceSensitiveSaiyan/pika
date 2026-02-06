@@ -1,0 +1,12 @@
+# Development overrides - automatically loaded by Docker Compose.
+#
+# This file is NOT used in production. The deploy workflow explicitly
+# targets docker-compose.yml only, which skips this override.
+
+services:
+  pika:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DEBUG=true
